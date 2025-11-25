@@ -8,7 +8,6 @@ mod cli;
 mod config;
 mod ec;
 mod types;
-mod utils;
 
 // Re-export for convenience
 use types::*;
@@ -321,24 +320,9 @@ mod tasks {
     mod power {
         use super::*;
         pub async fn run(cfg: Arc<RwLock<Config>>, ft: Arc<RwLock<Option<cli::FrameworkTool>>>) {
+            let _ = cfg;
             loop {
-                let (ac_profile, bat_profile) = {
-                    let c = cfg.read().await;
-                    (c.power.ac.clone(), c.power.battery.clone())
-                };
 
-                // Determine power source
-                let is_ac = if let Some(tool) = ft.read().await.as_ref() {
-                    if let Ok(info) = tool.read_power_info().await {
-                        info.status != "Discharging"
-                    } else {
-                        true // Assume AC if fail
-                    }
-                } else {
-                    true
-                };
-
-                let profile = if is_ac { ac_profile } else { bat_profile };
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
@@ -900,10 +884,15 @@ impl FrameworkControlApp {
     fn apply_power_settings(&mut self) {
         let (tdp, thermal, state) = (self.tdp_watts, self.thermal_limit, self.state.clone());
         self.runtime.spawn(async move {
-            if let Some(r) = state.ryzenadj.read().await.as_ref() {
-                let _ = r.set_tdp_watts(tdp).await;
-                let _ = r.set_thermal_limit_c(thermal).await;
-                tracing::info!("✓ Power: {}W, {}°C", tdp, thermal);
+            if let Some(ft) = state.framework_tool.read().await.as_ref() {
+                // TODO: Implement power settings via framework_tool
+                // let _ = ft.set_tdp_watts(tdp).await;
+                // let _ = ft.set_thermal_limit_c(thermal).await;
+                tracing::info!(
+                    "✓ Power settings requested: {}W, {}°C (not yet implemented)",
+                    tdp,
+                    thermal
+                );
             }
         });
         self.status_message = format!("✓ Power: {}W/{}°C", tdp, thermal);

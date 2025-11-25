@@ -59,11 +59,16 @@ impl FrameworkTool {
             let temps = crate::ec::read_temps();
             let fans = crate::ec::read_fans();
 
+            // Framework 16 sensor names
+            const SENSOR_NAMES: &[&str] = &[
+                "CPU", "GPU", "Battery", "Charger", "Memory", "VRM", "Ambient", "SSD",
+            ];
+
             let sensors = temps
                 .into_iter()
                 .enumerate()
                 .map(|(i, temp_c)| ThermalSensor {
-                    name: format!("Temp {}", i),
+                    name: SENSOR_NAMES.get(i).unwrap_or(&"Unknown").to_string(),
                     temp_c,
                 })
                 .collect();
