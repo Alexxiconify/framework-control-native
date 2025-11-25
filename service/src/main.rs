@@ -1,6 +1,9 @@
+#![windows_subsystem = "windows"]
+
 use eframe::egui;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 mod cli;
 mod config;
@@ -328,10 +331,13 @@ mod tasks {
     }
 }
 
-// Main application GUI
 struct FrameworkControlApp {
     state: AppState,
     runtime: tokio::runtime::Runtime,
+
+    // Tray Icon
+    tray_icon: Option<TrayIcon>,
+    start_on_boot: bool,
 
     // Cached data
     thermal_data: Option<cli::framework_tool::ThermalParsed>,
@@ -417,9 +423,28 @@ impl FrameworkControlApp {
 
         cc.egui_ctx.set_style(style);
 
+        // Initialize Tray Icon
+        let icon_data = load_icon();
+        let tray_icon = if let Ok(icon) =
+            Icon::from_rgba(icon_data.rgba.clone(), icon_data.width, icon_data.height)
+        {
+            TrayIconBuilder::new()
+                .with_tooltip("Framework Control")
+                .with_icon(icon)
+                .build()
+                .ok()
+        } else {
+            None
+        };
+
+        // Check startup status
+        let start_on_boot = check_start_on_boot();
+
         Self {
             state,
             runtime,
+            tray_icon,
+            start_on_boot,
             thermal_data: None,
             power_data: None,
             versions: None,
@@ -466,6 +491,23 @@ impl FrameworkControlApp {
 
 impl eframe::App for FrameworkControlApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle Tray Events
+        if let Some(tray) = &self.tray_icon {
+            if let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+                // If tray icon clicked, restore window
+                // Note: tray-icon 0.14 events might differ, checking documentation...
+                // Actually, usually a click event. For now, any event restores window.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
+
+        // Handle Close Request -> Minimize to Tray
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
         // Update data from background
         self.update_data(ctx);
 
@@ -938,16 +980,25 @@ impl FrameworkControlApp {
     }
 
     fn apply_charge_limit(&mut self) {
-        let (limit, state) = (self.charge_limit, self.state.clone());
+        let limit = self.charge_limit;
+        let state = self.state.clone();
         self.runtime.spawn(async move {
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
                 match ft.charge_limit_set(limit).await {
-                    Ok(_) => tracing::info!("✓ Charge limit: {}%", limit),
+                    Ok(_) => tracing::info!("✓ Charge limit set to {}%", limit),
                     Err(e) => tracing::error!("Failed to set charge limit: {}", e),
                 }
             }
         });
-        self.status_message = format!("✓ Charge: {}%", limit);
+        self.status_message = format!("✓ Charge Limit: {}%", limit);
+
+        // Save config
+        let mut cfg = self.state.config.blocking_write();
+        cfg.battery.charge_limit_max_pct = Some(SettingU8 {
+            enabled: true,
+            value: limit,
+        });
+        config::save(&cfg);
     }
 
     fn show_system(&mut self, ui: &mut egui::Ui) {
@@ -966,6 +1017,62 @@ impl FrameworkControlApp {
                     ui.label(format!("EC: {}", v.ec_version));
                 });
             }
+
+            ui.separator();
+            if ui
+                .checkbox(&mut self.start_on_boot, "Start on Startup")
+                .changed()
+            {
+                set_start_on_boot(self.start_on_boot);
+                // Save config (optional, but good for consistency)
+                let mut cfg = self.state.config.blocking_write();
+                cfg.start_on_boot = self.start_on_boot;
+                config::save(&cfg);
+            }
         });
+    }
+}
+
+fn check_start_on_boot() -> bool {
+    std::process::Command::new("reg")
+        .args(&[
+            "query",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            "FrameworkControl",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn set_start_on_boot(enable: bool) {
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let exe_str = exe_path.to_string_lossy();
+
+    if enable {
+        let _ = std::process::Command::new("reg")
+            .args(&[
+                "add",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "/v",
+                "FrameworkControl",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &format!("\"{}\"", exe_str),
+                "/f",
+            ])
+            .output();
+    } else {
+        let _ = std::process::Command::new("reg")
+            .args(&[
+                "delete",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "/v",
+                "FrameworkControl",
+                "/f",
+            ])
+            .output();
     }
 }

@@ -15,6 +15,8 @@ pub struct Config {
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub start_on_boot: bool,
 }
 
 impl Default for Config {
@@ -26,17 +28,23 @@ impl Default for Config {
             updates: UpdatesConfig::default(),
             telemetry: TelemetryConfig::default(),
             ui: UiConfig::default(),
+            start_on_boot: false,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum FanControlMode {
-    #[default]
     Disabled,
     Manual,
     Curve,
+}
+
+impl Default for FanControlMode {
+    fn default() -> Self {
+        Self::Curve
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
