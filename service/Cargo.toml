@@ -12,33 +12,21 @@ path = "src/main.rs"
 winres = "0.1"
 
 [dependencies]
-# Core async runtime - optimized features only
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "fs"], default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"], default-features = false }
 
-# Serialization
 serde = { version = "1", features = ["derive"], default-features = false }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 
-# Logging - minimal features
-tracing = { version = "0.1", default-features = false }
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"], default-features = false }
-
-# System info - minimal features
-sysinfo = { version = "0.30", default-features = false, features = ["multithread"] }
-
-# Windows Service support
-windows-service = { version = "0.7", default-features = false }
-
-# Native GUI - Optimized for performance
 eframe = { version = "0.28", default-features = false, features = ["default_fonts", "glow"] }
 egui = { version = "0.28", default-features = false }
-egui_plot = { version = "0.28", default-features = false }
 
-# Tray Icon
-tray-icon = "0.14"
-
-# Framework System Library
-framework_lib = { path = "framework-system/framework_lib" }
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+] }
 
 [profile.release]
 opt-level = 3           # Full optimization (changed from "z" for speed)

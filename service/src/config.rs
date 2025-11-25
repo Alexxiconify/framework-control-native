@@ -3,7 +3,6 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use crate::types::Config;
-use tracing::info;
 
 pub fn config_path() -> PathBuf {
     if let Ok(p) = std::env::var("FRAMEWORK_CONTROL_CONFIG") {
@@ -21,24 +20,19 @@ pub fn load() -> Config {
     if let Ok(mut f) = File::open(&path) {
         let mut buf = String::new();
         if let Err(e) = f.read_to_string(&mut buf) {
-            tracing::warn!("Failed to read config file {:?}: {}", path, e);
+            // Failed to read config file
             return Config::default();
         }
         match serde_json::from_str::<Config>(&buf) {
             Ok(cfg) => {
-                info!("Loaded config from {:?}", path);
                 return cfg;
             }
             Err(e) => {
-                tracing::warn!(
-                    "Failed to parse config file {:?}: {}. Using defaults.",
-                    path,
-                    e
-                );
+                // Failed to parse config file. Using defaults.
             }
         }
     } else {
-        tracing::debug!("No config file at {:?}, using defaults", path);
+        // No config file, using defaults
     }
     Config::default()
 }
@@ -47,7 +41,7 @@ pub fn save(cfg: &Config) {
     let path = config_path();
     if let Some(parent) = path.parent() {
         if let Err(e) = create_dir_all(parent) {
-            tracing::error!("Failed to create config directory {:?}: {}", parent, e);
+            // Failed to create config directory
             return;
         }
     }
@@ -56,12 +50,12 @@ pub fn save(cfg: &Config) {
         Ok(json) => {
             if let Ok(mut f) = File::create(&path) {
                 if let Err(e) = f.write_all(json.as_bytes()) {
-                    tracing::error!("Failed to write config file {:?}: {}", path, e);
+                    // Failed to write config file
                 } else {
-                    tracing::info!("Saved config to {:?}", path);
+                    // Saved config
                 }
             } else {
-                tracing::error!("Failed to create config file {:?}", path);
+                // Failed to create config file
             }
         }
         Err(e) => {

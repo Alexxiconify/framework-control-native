@@ -8,8 +8,6 @@ pub struct RyzenAdjInfo {
     pub thermal_limit_c: Option<u32>,
 }
 
-/// Parse output of `ryzenadj --info --dump-table`
-/// Strategy: scan table rows and extract key limits as watts (rounded)
 pub fn parse_info(text: &str) -> RyzenAdjInfo {
     let mut info = RyzenAdjInfo::default();
     if text.is_empty() {
@@ -17,14 +15,12 @@ pub fn parse_info(text: &str) -> RyzenAdjInfo {
     }
     let mut limits_w: Vec<f32> = Vec::new();
 
-    // Parse lines like: | STAPM LIMIT         |    67.000 | stapm-limit        |
     for line in text.lines() {
         let l = line.trim();
         if !l.starts_with('|') || l.starts_with("|-") {
             continue;
         }
 
-        // Split by '|' and extract parts
         let parts: Vec<&str> = l.split('|').collect();
         if parts.len() < 3 {
             continue;
@@ -34,14 +30,12 @@ pub fn parse_info(text: &str) -> RyzenAdjInfo {
         let value_str = parts[2].trim();
 
         if let Ok(v) = value_str.parse::<f32>() {
-            // Collect power limit candidates
             if name.contains("STAPM LIMIT")
                 || name.contains("PPT LIMIT FAST")
                 || name.contains("PPT LIMIT SLOW")
             {
                 limits_w.push(v);
             }
-            // Thermal limit
             if name.contains("THM LIMIT CORE") || name.contains("TCTL") {
                 info.thermal_limit_c = Some(v.round() as u32);
             }

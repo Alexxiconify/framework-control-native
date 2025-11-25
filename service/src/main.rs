@@ -3,13 +3,12 @@
 use eframe::egui;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 mod cli;
 mod config;
+mod ec;
 mod types;
 mod utils;
-mod windows_service;
 
 // Re-export for convenience
 use types::*;
@@ -83,11 +82,15 @@ fn run_gui() -> Result<(), eframe::Error> {
     });
 
     // Launch GUI
+    let args: Vec<String> = std::env::args().collect();
+    let start_minimized = args.iter().any(|a| a == "--minimized");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
             .with_min_inner_size([800.0, 600.0])
-            .with_icon(load_icon()),
+            .with_icon(load_icon())
+            .with_visible(!start_minimized),
         ..Default::default()
     };
 
@@ -196,7 +199,7 @@ impl AppState {
     fn spawn_ryzenadj_resolver(ryz_lock: Arc<RwLock<Option<cli::RyzenAdj>>>) {
         tokio::spawn(async move {
             use tokio::time::{sleep, Duration};
-            let mut consecutive_errors = 0u32;
+            let mut _consecutive_errors = 0u32;
             loop {
                 let is_missing = { ryz_lock.read().await.is_none() };
                 if is_missing {
@@ -204,11 +207,11 @@ impl AppState {
                         Ok(new_ryz) => {
                             *ryz_lock.write().await = Some(new_ryz);
                             tracing::info!("RyzenAdj is now available");
-                            consecutive_errors = 0;
+                            _consecutive_errors = 0;
                         }
                         Err(e) => {
-                            consecutive_errors += 1;
-                            if consecutive_errors <= 3 || consecutive_errors % 10 == 0 {
+                            _consecutive_errors += 1;
+                            if _consecutive_errors <= 3 || _consecutive_errors % 10 == 0 {
                                 tracing::debug!("RyzenAdj not available: {}", e);
                             }
                         }
@@ -222,7 +225,7 @@ impl AppState {
     fn spawn_framework_tool_resolver(ft_lock: Arc<RwLock<Option<cli::FrameworkTool>>>) {
         tokio::spawn(async move {
             use tokio::time::{sleep, Duration};
-            let mut consecutive_errors = 0u32;
+            let mut _consecutive_errors = 0u32;
             loop {
                 let current = { ft_lock.read().await.clone() };
                 match current {
@@ -230,14 +233,14 @@ impl AppState {
                         if let Err(e) = cli.read_versions().await {
                             *ft_lock.write().await = None;
                             tracing::warn!("framework_tool unavailable ({})", e);
-                            consecutive_errors = 0;
+                            _consecutive_errors = 0;
                         }
                     }
                     None => {
                         let cli = cli::FrameworkTool::new().await;
                         *ft_lock.write().await = Some(cli);
                         tracing::info!("framework_tool is now available");
-                        consecutive_errors = 0;
+                        _consecutive_errors = 0;
                     }
                 }
                 sleep(Duration::from_secs(5)).await;
@@ -292,41 +295,181 @@ mod tasks {
 
     mod fan_curve {
         use super::*;
-        pub async fn run(_ft: Arc<RwLock<Option<cli::FrameworkTool>>>, _cfg: Arc<RwLock<Config>>) {
-            // TODO: Implement fan curve logic
-            tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
+        pub async fn run(ft: Arc<RwLock<Option<cli::FrameworkTool>>>, cfg: Arc<RwLock<Config>>) {
+            loop {
+                let (mode, curve, manual_duty) = {
+                    let c = cfg.read().await;
+                    let mode = c.fan.mode.clone().unwrap_or(FanControlMode::Curve);
+                    let curve = c.fan.curve.clone().unwrap_or_else(|| CurveConfig {
+                        points: vec![[40, 20], [50, 30], [60, 40], [70, 60], [80, 80], [90, 100]],
+                        ..Default::default()
+                    });
+                    let manual = c
+                        .fan
+                        .manual
+                        .clone()
+                        .unwrap_or(ManualConfig { duty_pct: 50 });
+                    (mode, curve, manual.duty_pct)
+                };
+
+                match mode {
+                    FanControlMode::Curve => {
+                        if let Some(tool) = ft.read().await.as_ref() {
+                            if let Ok(thermal) = tool.read_thermal().await {
+                                let max_temp = thermal
+                                    .sensors
+                                    .iter()
+                                    .map(|s| s.temp_c)
+                                    .fold(f32::NEG_INFINITY, f32::max);
+
+                                // Interpolate
+                                let mut target_duty = 50.0;
+                                let points = curve.points;
+                                // Sort points just in case
+                                let mut sorted_points = points.clone();
+                                sorted_points.sort_by(|a, b| a[0].cmp(&b[0]));
+
+                                for i in 0..sorted_points.len() {
+                                    let p1 = sorted_points[i];
+                                    if i == 0 && max_temp <= p1[0] as f32 {
+                                        target_duty = p1[1] as f32;
+                                        break;
+                                    }
+                                    if i == sorted_points.len() - 1 {
+                                        target_duty = p1[1] as f32;
+                                        break;
+                                    }
+                                    let p2 = sorted_points[i + 1];
+                                    if max_temp >= p1[0] as f32 && max_temp <= p2[0] as f32 {
+                                        let t1 = p1[0] as f32;
+                                        let t2 = p2[0] as f32;
+                                        let d1 = p1[1] as f32;
+                                        let d2 = p2[1] as f32;
+                                        let ratio = (max_temp - t1) / (t2 - t1);
+                                        target_duty = d1 + (d2 - d1) * ratio;
+                                        break;
+                                    }
+                                }
+                                let _ = tool.set_fan_duty(target_duty as u32, None).await;
+                            }
+                        }
+                    }
+                    FanControlMode::Manual => {
+                        if let Some(tool) = ft.read().await.as_ref() {
+                            let _ = tool.set_fan_duty(manual_duty, None).await;
+                        }
+                    }
+                    FanControlMode::Disabled => {
+                        // Auto mode
+                        if let Some(tool) = ft.read().await.as_ref() {
+                            let _ = tool.set_fan_control_auto(None).await;
+                        }
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+            }
         }
     }
 
     mod power {
         use super::*;
         pub async fn run(
-            _ryz: Arc<RwLock<Option<cli::RyzenAdj>>>,
-            _cfg: Arc<RwLock<Config>>,
-            _ft: Arc<RwLock<Option<cli::FrameworkTool>>>,
+            ryz: Arc<RwLock<Option<cli::RyzenAdj>>>,
+            cfg: Arc<RwLock<Config>>,
+            ft: Arc<RwLock<Option<cli::FrameworkTool>>>,
         ) {
-            // TODO: Implement power management
-            tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
+            loop {
+                let (ac_profile, bat_profile) = {
+                    let c = cfg.read().await;
+                    (c.power.ac.clone(), c.power.battery.clone())
+                };
+
+                // Determine power source
+                let is_ac = if let Some(tool) = ft.read().await.as_ref() {
+                    if let Ok(info) = tool.read_power_info().await {
+                        info.status != "Discharging"
+                    } else {
+                        true // Assume AC if fail
+                    }
+                } else {
+                    true
+                };
+
+                let profile = if is_ac { ac_profile } else { bat_profile };
+
+                if let Some(p) = profile {
+                    if let Some(r) = ryz.read().await.as_ref() {
+                        if let Some(tdp) = p.tdp_watts {
+                            if tdp.enabled {
+                                let _ = r.set_tdp_watts(tdp.value).await;
+                            }
+                        }
+                        if let Some(temp) = p.thermal_limit_c {
+                            if temp.enabled {
+                                let _ = r.set_thermal_limit_c(temp.value).await;
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
         }
     }
 
     mod battery {
         use super::*;
-        pub async fn run(_ft: Arc<RwLock<Option<cli::FrameworkTool>>>, _cfg: Arc<RwLock<Config>>) {
-            // TODO: Implement battery management
-            tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
+        pub async fn run(ft: Arc<RwLock<Option<cli::FrameworkTool>>>, cfg: Arc<RwLock<Config>>) {
+            loop {
+                let limit_setting = {
+                    let c = cfg.read().await;
+                    c.battery.charge_limit_max_pct.clone()
+                };
+
+                if let Some(setting) = limit_setting {
+                    if setting.enabled {
+                        if let Some(tool) = ft.read().await.as_ref() {
+                            let _ = tool.charge_limit_set(setting.value).await;
+                        }
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            }
         }
     }
 
     mod telemetry {
         use super::*;
         pub async fn run(
-            _ft: Arc<RwLock<Option<cli::FrameworkTool>>>,
-            _cfg: Arc<RwLock<Config>>,
-            _samples: Arc<RwLock<std::collections::VecDeque<TelemetrySample>>>,
+            ft: Arc<RwLock<Option<cli::FrameworkTool>>>,
+            cfg: Arc<RwLock<Config>>,
+            samples: Arc<RwLock<std::collections::VecDeque<TelemetrySample>>>,
         ) {
-            // TODO: Implement telemetry collection
-            tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
+            loop {
+                let poll_ms = { cfg.read().await.telemetry.poll_ms };
+
+                if let Some(tool) = ft.read().await.as_ref() {
+                    if let Ok(thermal) = tool.read_thermal().await {
+                        let mut temps = std::collections::BTreeMap::new();
+                        for s in thermal.sensors {
+                            temps.insert(s.name, s.temp_c as i32);
+                        }
+                        let rpms = thermal.fans.iter().map(|&f| f as u32).collect();
+
+                        let sample = TelemetrySample {
+                            ts_ms: chrono::Utc::now().timestamp_millis(),
+                            temps,
+                            rpms,
+                        };
+
+                        let mut s = samples.write().await;
+                        s.push_back(sample);
+                        if s.len() > 1800 {
+                            s.pop_front();
+                        }
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(poll_ms)).await;
+            }
         }
     }
 }
@@ -492,11 +635,9 @@ impl FrameworkControlApp {
 impl eframe::App for FrameworkControlApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle Tray Events
-        if let Some(tray) = &self.tray_icon {
-            if let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+        if let Some(_tray) = &self.tray_icon {
+            if let Ok(_event) = tray_icon::TrayIconEvent::receiver().try_recv() {
                 // If tray icon clicked, restore window
-                // Note: tray-icon 0.14 events might differ, checking documentation...
-                // Actually, usually a click event. For now, any event restores window.
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
@@ -1060,7 +1201,7 @@ fn set_start_on_boot(enable: bool) {
                 "/t",
                 "REG_SZ",
                 "/d",
-                &format!("\"{}\"", exe_str),
+                &format!("\"{}\" --minimized", exe_str),
                 "/f",
             ])
             .output();

@@ -10,8 +10,6 @@ pub struct Config {
     #[serde(default)]
     pub battery: BatteryConfig,
     #[serde(default)]
-    pub updates: UpdatesConfig,
-    #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub ui: UiConfig,
@@ -25,7 +23,6 @@ impl Default for Config {
             fan: FanControlConfig::default(),
             power: PowerConfig::default(),
             battery: BatteryConfig::default(),
-            updates: UpdatesConfig::default(),
             telemetry: TelemetryConfig::default(),
             ui: UiConfig::default(),
             start_on_boot: false,
@@ -66,8 +63,6 @@ pub struct ManualConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurveConfig {
-    #[serde(default)]
-    pub sensors: Vec<String>,
     #[serde(default = "default_points")]
     pub points: Vec<[u32; 2]>,
     #[serde(default = "default_poll_ms")]
@@ -91,10 +86,15 @@ fn default_rate_limit_pct_per_step() -> u32 {
     100
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UpdatesConfig {
-    #[serde(default)]
-    pub auto_install: bool,
+impl Default for CurveConfig {
+    fn default() -> Self {
+        Self {
+            points: default_points(),
+            poll_ms: default_poll_ms(),
+            hysteresis_c: default_hysteresis_c(),
+            rate_limit_pct_per_step: default_rate_limit_pct_per_step(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
