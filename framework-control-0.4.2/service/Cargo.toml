@@ -1,0 +1,50 @@
+[package]
+name = "framework-control"
+version = "0.4.2"
+edition = "2021"
+authors = ["Framework Control"]
+
+[[bin]]
+name = "framework-control"
+path = "src/main.rs"
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "fs"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# System info
+sysinfo = { version = "0.30", features = ["multithread"] }
+
+# HTTP client (for updates only)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# Archive handling
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+
+# Native GUI - Latest stable versions
+eframe = { version = "0.28", default-features = false, features = ["default_fonts", "glow"] }
+egui = "0.28"
+egui_plot = "0.28"
+
+[profile.release]
+opt-level = "z"         # Optimize for size
+lto = "thin"            # Faster LTO
+codegen-units = 16      # Faster builds (vs 1)
+strip = true            # Strip symbols
+panic = "abort"         # Smaller binary
+
+[profile.dev]
+opt-level = 1           # Faster dev builds
+incremental = true      # Enable incremental compilation
+debug = false           # No debug symbols (faster)
+
+[package.metadata.wix]
+eula = false
