@@ -21,6 +21,7 @@ service/wix/
 # IDE & Editors
 .vscode/
 .idea/
+.github/
 *.swp
 *.swo
 *~
