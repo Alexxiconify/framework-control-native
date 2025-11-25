@@ -7,7 +7,10 @@ use crate::cli::FrameworkTool;
 use crate::types::{Config, FanControlMode};
 
 /// Main fan control task that runs continuously based on config
-pub async fn run(cli_lock: Arc<tokio::sync::RwLock<Option<FrameworkTool>>>, cfg: Arc<tokio::sync::RwLock<Config>>) {
+pub async fn run(
+    cli_lock: Arc<tokio::sync::RwLock<Option<FrameworkTool>>>,
+    cfg: Arc<tokio::sync::RwLock<Config>>,
+) {
     info!("Fan control task started");
 
     let mut last_duty: Option<u32> = None;
@@ -44,7 +47,7 @@ pub async fn run(cli_lock: Arc<tokio::sync::RwLock<Option<FrameworkTool>>>, cfg:
             FanControlMode::Disabled => {
                 if last_mode != Some(FanControlMode::Disabled) {
                     debug!("Mode change: {:?} -> Disabled", last_mode);
-                    let _ = cli.autofanctrl().await;
+                    let _ = cli.set_fan_control_auto(None).await;
                     last_duty = None;
                 }
                 last_mode = Some(FanControlMode::Disabled);
@@ -74,7 +77,7 @@ pub async fn run(cli_lock: Arc<tokio::sync::RwLock<Option<FrameworkTool>>>, cfg:
                 } else {
                     // No manual duty set, fall back to auto
                     debug!("Manual: No duty set, switching to auto fan control");
-                    let _ = cli.autofanctrl().await;
+                    let _ = cli.set_fan_control_auto(None).await;
                     last_duty = None;
                 }
                 last_mode = Some(FanControlMode::Manual);
@@ -87,7 +90,7 @@ pub async fn run(cli_lock: Arc<tokio::sync::RwLock<Option<FrameworkTool>>>, cfg:
                 }
                 let Some(curve_cfg) = &config.curve else {
                     warn!("Curve mode without curve config; falling back to platform auto");
-                    let _ = cli.autofanctrl().await;
+                    let _ = cli.set_fan_control_auto(None).await;
                     last_duty = None;
                     sleep(poll_interval).await;
                     continue;
@@ -187,17 +190,16 @@ pub async fn run(cli_lock: Arc<tokio::sync::RwLock<Option<FrameworkTool>>>, cfg:
 
 /// Read thermal and return the maximum temperature across the provided sensors.
 async fn get_max_sensor_temperature(cli: &FrameworkTool, sensors: &[String]) -> Option<i32> {
-    let output = cli.thermal().await.ok()?;
-    let temps = &output.temps; // BTreeMap<String, i32>
+    let output = cli.read_thermal().await.ok()?;
+    let temps = &output.sensors;
     let mut best: Option<i32> = None;
     for name in sensors {
-        if let Some(&v) = temps.get(name) {
-            best = Some(match best { Some(b) => b.max(v), None => v });
-            continue;
-        }
-        if let Some((_, v)) = temps.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
-            let v = *v;
-            best = Some(match best { Some(b) => b.max(v), None => v });
+        if let Some(sensor) = temps.iter().find(|s| s.name.eq_ignore_ascii_case(name)) {
+            let v = sensor.temp_c as i32;
+            best = Some(match best {
+                Some(b) => b.max(v),
+                None => v,
+            });
         }
     }
     best

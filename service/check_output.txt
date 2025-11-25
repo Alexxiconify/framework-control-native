@@ -1,0 +1,87 @@
+   Compiling framework-control v0.4.3 (C:\Users\Taylor Allred\Documents\Files\projects\framework-control-native\service)
+    Checking framework_lib v0.4.5 (C:\Users\Taylor Allred\Documents\Files\projects\framework-control-native\service\framework-system\framework_lib)
+warning: unused imports: `parse_power`, `parse_thermal`, and `parse_versions`
+ --> src\cli\framework_tool.rs:2:5
+  |
+2 |     parse_power, parse_thermal, parse_versions, BatteryChargeLimitInfo, PowerBatteryInfo,
+  |     ^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `error` and `info`
+ --> src\cli\framework_tool.rs:9:15
+  |
+9 | use tracing::{error, info};
+  |               ^^^^^  ^^^^
+
+warning: unused import: `create_dir_all`
+ --> src\config.rs:1:15
+  |
+1 | use std::fs::{create_dir_all, File};
+  |               ^^^^^^^^^^^^^^
+
+warning: unused import: `Write`
+ --> src\config.rs:2:21
+  |
+2 | use std::io::{Read, Write};
+  |                     ^^^^^
+
+error[E0599]: no method named `map_err` found for struct `framework_lib::chromium_ec::CrosEc` in the current scope
+  --> src\cli\framework_tool.rs:18:27
+   |
+18 |             CrosEc::new().map_err(|e| format!("Failed to initialize EC: {:?}", e))
+   |                           ^^^^^^^ method not found in `framework_lib::chromium_ec::CrosEc`
+
+error[E0599]: no method named `map_err` found for struct `framework_lib::chromium_ec::CrosEc` in the current scope
+  --> src\cli\framework_tool.rs:32:36
+   |
+32 |             let ec = CrosEc::new().map_err(|e| format!("Failed to init EC: {:?}", e))?;
+   |                                    ^^^^^^^ method not found in `framework_lib::chromium_ec::CrosEc`
+
+warning: unused variable: `ec`
+  --> src\cli\framework_tool.rs:56:29
+   |
+56 |         Self::with_ec(move |ec| {
+   |                             ^^ help: if this is intentional, prefix it with an underscore: `_ec`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `percent`
+  --> src\cli\framework_tool.rs:55:38
+   |
+55 |     pub async fn set_fan_duty(&self, percent: u32, fan_index: Option<u32>) -> Result<(), String> {
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_percent`
+
+warning: unused variable: `fan_index`
+  --> src\cli\framework_tool.rs:55:52
+   |
+55 |     pub async fn set_fan_duty(&self, percent: u32, fan_index: Option<u32>) -> Result<(), String> {
+   |                                                    ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fan_index`
+
+warning: unused variable: `ec`
+  --> src\cli\framework_tool.rs:63:24
+   |
+63 |         Self::with_ec(|ec| {
+   |                        ^^ help: if this is intentional, prefix it with an underscore: `_ec`
+
+warning: unused variable: `max_pct`
+  --> src\cli\framework_tool.rs:73:42
+   |
+73 |     pub async fn charge_limit_set(&self, max_pct: u8) -> Result<(), String> {
+   |                                          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_max_pct`
+
+warning: unused variable: `rate_c`
+  --> src\cli\framework_tool.rs:79:9
+   |
+79 |         rate_c: f32,
+   |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rate_c`
+
+warning: unused variable: `soc_threshold_pct`
+  --> src\cli\framework_tool.rs:80:9
+   |
+80 |         soc_threshold_pct: Option<u8>,
+   |         ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_soc_threshold_pct`
+
+For more information about this error, try `rustc --explain E0599`.
+warning: `framework-control` (bin "framework-control") generated 11 warnings
+error: could not compile `framework-control` (bin "framework-control") due to 2 previous errors; 11 warnings emitted

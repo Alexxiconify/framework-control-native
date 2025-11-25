@@ -1,5 +1,4 @@
 pub mod framework_tool;
-pub mod framework_tool_parser;
 pub mod ryzen_adj;
 pub mod ryzen_adj_parser;
 

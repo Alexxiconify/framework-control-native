@@ -69,13 +69,13 @@ fn run_service_main() -> windows_service::Result<()> {
 
 fn run_fan_curve_service() {
     use tokio::runtime::Runtime;
-    
+
     let runtime = Runtime::new().expect("Failed to create runtime");
-    
+
     runtime.block_on(async {
         // Initialize state
         let state = crate::AppState::initialize().await;
-        
+
         // Load fan curve from config
         let config = state.config.read().await;
         let fan_curve = vec![
@@ -87,15 +87,19 @@ fn run_fan_curve_service() {
             (90.0, 100.0),
         ];
         drop(config);
-        
+
         tracing::info!("Framework Control Service started - fan curve active");
-        
+
         // Main service loop
         loop {
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                if let Ok(thermal) = ft.thermal().await {
-                    let max_temp = thermal.temps.values().max().copied().unwrap_or(50) as f32;
-                    
+                if let Ok(thermal) = ft.read_thermal().await {
+                    let max_temp = thermal
+                        .sensors
+                        .iter()
+                        .map(|s| s.temp_c)
+                        .fold(f32::NEG_INFINITY, f32::max);
+
                     // Interpolate fan speed from curve
                     let mut duty = 50.0;
                     for i in 0..fan_curve.len() {
@@ -107,26 +111,28 @@ fn run_fan_curve_service() {
                             duty = fan_curve[i].1;
                             break;
                         }
-                        if i < fan_curve.len() - 1 && max_temp >= fan_curve[i].0 && max_temp <= fan_curve[i+1].0 {
+                        if i < fan_curve.len() - 1
+                            && max_temp >= fan_curve[i].0
+                            && max_temp <= fan_curve[i + 1].0
+                        {
                             let t1 = fan_curve[i].0;
-                            let t2 = fan_curve[i+1].0;
+                            let t2 = fan_curve[i + 1].0;
                             let d1 = fan_curve[i].1;
-                            let d2 = fan_curve[i+1].1;
+                            let d2 = fan_curve[i + 1].1;
                             let ratio = (max_temp - t1) / (t2 - t1);
                             duty = d1 + (d2 - d1) * ratio;
                             break;
                         }
                     }
-                    
+
                     // Apply fan speed
                     let _ = ft.set_fan_duty(duty as u32, None).await;
                     tracing::debug!("Fan curve: {}°C -> {}%", max_temp, duty as u32);
                 }
             }
-            
+
             // Wait 5 seconds before next update
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
     });
 }
-

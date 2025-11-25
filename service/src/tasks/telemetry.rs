@@ -30,13 +30,19 @@ pub async fn run(
         };
 
         // Read thermal
-        match cli.thermal().await {
+        match cli.read_thermal().await {
             Ok(parsed) => {
                 let now_ms = unix_time_ms();
+                let mut temps = std::collections::BTreeMap::new();
+                for sensor in parsed.sensors {
+                    temps.insert(sensor.name, sensor.temp_c as i32);
+                }
+                let rpms = parsed.fans.iter().map(|&f| f as u32).collect();
+
                 let sample = TelemetrySample {
                     ts_ms: now_ms,
-                    temps: parsed.temps,
-                    rpms: parsed.rpms,
+                    temps,
+                    rpms,
                 };
                 {
                     let mut w = samples_lock.write().await;
@@ -68,5 +74,3 @@ fn unix_time_ms() -> i64 {
         .unwrap_or_default()
         .as_millis() as i64
 }
-
-

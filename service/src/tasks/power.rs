@@ -36,12 +36,10 @@ async fn tick(
     let cfg_power = { cfg.read().await.power.clone() };
 
     // Detect AC presence via framework_tool and continue if it fails
-    let Ok(p) = ft.power().await else {
+    let Ok(p) = ft.read_power_info().await else {
         return;
     };
-    let Some(ac_present) = p.ac_present else {
-        return;
-    };
+    let ac_present = p.status != "Discharging";
 
     // Select profile based on AC/battery state; only act if a profile exists
     let maybe_profile = if ac_present {

@@ -41,7 +41,7 @@ egui = { version = "0.28", default-features = false }
 egui_plot = { version = "0.28", default-features = false }
 
 # Framework System Library
-framework_lib = { git = "https://github.com/FrameworkComputer/framework-system", branch = "main" }
+framework_lib = { path = "framework-system/framework_lib" }
 
 [profile.release]
 opt-level = 3           # Full optimization (changed from "z" for speed)

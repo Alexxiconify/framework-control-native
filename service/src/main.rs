@@ -63,14 +63,14 @@ fn run_gui() -> Result<(), eframe::Error> {
             if let Some(ft) = state_clone_poll.framework_tool.read().await.as_ref() {
                 let mut cache = state_clone_poll.cache.write().await;
 
-                if let Ok(thermal) = ft.thermal().await {
+                if let Ok(thermal) = ft.read_thermal().await {
                     cache.thermal = Some(thermal);
                 }
-                if let Ok(power) = ft.power().await {
+                if let Ok(power) = ft.read_power_info().await {
                     cache.power = Some(power);
                 }
                 if cache.versions.is_none() {
-                    if let Ok(v) = ft.versions().await {
+                    if let Ok(v) = ft.read_versions().await {
                         cache.versions = Some(v);
                     }
                 }
@@ -164,9 +164,9 @@ pub struct AppState {
 
 #[derive(Default, Clone)]
 pub struct CachedData {
-    pub thermal: Option<cli::framework_tool_parser::ThermalParsed>,
-    pub power: Option<cli::framework_tool_parser::PowerBatteryInfo>,
-    pub versions: Option<cli::framework_tool_parser::VersionsParsed>,
+    pub thermal: Option<cli::framework_tool::ThermalParsed>,
+    pub power: Option<cli::framework_tool::PowerBatteryInfo>,
+    pub versions: Option<cli::framework_tool::Versions>,
 }
 
 impl AppState {
@@ -176,9 +176,7 @@ impl AppState {
         let ryzenadj = Arc::new(RwLock::new(cli::RyzenAdj::new().await.ok()));
         Self::spawn_ryzenadj_resolver(ryzenadj.clone());
 
-        let framework_tool = Arc::new(RwLock::new(
-            cli::framework_tool::resolve_or_install().await.ok(),
-        ));
+        let framework_tool = Arc::new(RwLock::new(Some(cli::FrameworkTool::new().await)));
         Self::spawn_framework_tool_resolver(framework_tool.clone());
 
         let cache = Arc::new(RwLock::new(CachedData::default()));
@@ -226,25 +224,18 @@ impl AppState {
                 let current = { ft_lock.read().await.clone() };
                 match current {
                     Some(cli) => {
-                        if let Err(e) = cli.versions().await {
+                        if let Err(e) = cli.read_versions().await {
                             *ft_lock.write().await = None;
                             tracing::warn!("framework_tool unavailable ({})", e);
                             consecutive_errors = 0;
                         }
                     }
-                    None => match cli::FrameworkTool::new().await {
-                        Ok(cli) => {
-                            *ft_lock.write().await = Some(cli);
-                            tracing::info!("framework_tool is now available");
-                            consecutive_errors = 0;
-                        }
-                        Err(e) => {
-                            consecutive_errors += 1;
-                            if consecutive_errors <= 3 || consecutive_errors % 10 == 0 {
-                                tracing::debug!("framework_tool not available: {}", e);
-                            }
-                        }
-                    },
+                    None => {
+                        let cli = cli::FrameworkTool::new().await;
+                        *ft_lock.write().await = Some(cli);
+                        tracing::info!("framework_tool is now available");
+                        consecutive_errors = 0;
+                    }
                 }
                 sleep(Duration::from_secs(5)).await;
             }
@@ -343,9 +334,9 @@ struct FrameworkControlApp {
     runtime: tokio::runtime::Runtime,
 
     // Cached data
-    thermal_data: Option<cli::framework_tool_parser::ThermalParsed>,
-    power_data: Option<cli::framework_tool_parser::PowerBatteryInfo>,
-    versions: Option<cli::framework_tool_parser::VersionsParsed>,
+    thermal_data: Option<cli::framework_tool::ThermalParsed>,
+    power_data: Option<cli::framework_tool::PowerBatteryInfo>,
+    versions: Option<cli::framework_tool::Versions>,
 
     // Fan control settings
     fan_duty: u32,
@@ -485,9 +476,8 @@ impl eframe::App for FrameworkControlApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(versions) = &self.versions {
                         ui.label(format!(
-                            "EC: {} | UEFI: {}",
-                            versions.ec_build_version.as_deref().unwrap_or("?"),
-                            versions.uefi_version.as_deref().unwrap_or("?")
+                            "EC: {} | BIOS: {}",
+                            versions.ec_version, versions.bios_version
                         ));
                     }
                 });
@@ -541,16 +531,17 @@ impl FrameworkControlApp {
                     .num_columns(2)
                     .spacing([40.0, 4.0])
                     .show(ui, |ui| {
-                        for (name, temp) in &thermal.temps {
-                            ui.label(name);
-                            let color = if *temp > 85 {
+                        for sensor in &thermal.sensors {
+                            ui.label(&sensor.name);
+                            let temp = sensor.temp_c;
+                            let color = if temp > 85.0 {
                                 egui::Color32::RED
-                            } else if *temp > 75 {
+                            } else if temp > 75.0 {
                                 egui::Color32::from_rgb(255, 165, 0)
                             } else {
                                 egui::Color32::from_rgb(0, 200, 0)
                             };
-                            ui.colored_label(color, format!("{}°C", temp));
+                            ui.colored_label(color, format!("{:.1}°C", temp));
                             ui.end_row();
                         }
                     });
@@ -568,10 +559,10 @@ impl FrameworkControlApp {
                     .num_columns(2)
                     .spacing([40.0, 4.0])
                     .show(ui, |ui| {
-                        for (idx, rpm) in thermal.rpms.iter().enumerate() {
+                        for (idx, rpm) in thermal.fans.iter().enumerate() {
                             ui.label(format!("Fan {}", idx + 1));
                             ui.colored_label(
-                                if *rpm > 4000 {
+                                if *rpm > 4000.0 {
                                     egui::Color32::from_rgb(255, 165, 0)
                                 } else {
                                     egui::Color32::from_rgb(100, 200, 255)
@@ -595,30 +586,27 @@ impl FrameworkControlApp {
                     .show(ui, |ui| {
                         ui.label("Status");
                         ui.colored_label(
-                            if power.charging.unwrap_or(false) {
+                            if power.status == "Charging" {
                                 egui::Color32::from_rgb(0, 200, 0)
                             } else {
                                 egui::Color32::from_rgb(100, 150, 255)
                             },
-                            if power.charging.unwrap_or(false) {
-                                "⚡ Charging"
-                            } else {
-                                "🔋 Battery"
-                            },
+                            &power.status,
                         );
                         ui.end_row();
 
-                        if let Some(pct) = power.percentage {
+                        {
+                            let pct = power.charge_percent;
                             ui.label("Level");
                             ui.colored_label(
-                                if pct < 20 {
+                                if pct < 20.0 {
                                     egui::Color32::RED
-                                } else if pct < 50 {
+                                } else if pct < 50.0 {
                                     egui::Color32::from_rgb(255, 165, 0)
                                 } else {
                                     egui::Color32::from_rgb(0, 200, 0)
                                 },
-                                format!("{}%", pct),
+                                format!("{:.1}%", pct),
                             );
                             ui.end_row();
                         }
@@ -768,7 +756,7 @@ impl FrameworkControlApp {
         let state = self.state.clone();
         self.runtime.spawn(async move {
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                match ft.autofanctrl().await {
+                match ft.set_fan_control_auto(None).await {
                     Ok(_) => tracing::info!("✓ Fan reset to auto"),
                     Err(e) => tracing::error!("Failed to reset fan: {}", e),
                 }
@@ -788,8 +776,12 @@ impl FrameworkControlApp {
         self.runtime.spawn(async move {
             loop {
                 if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                    if let Ok(thermal) = ft.thermal().await {
-                        let max_temp = thermal.temps.values().max().copied().unwrap_or(50) as f32;
+                    if let Ok(thermal) = ft.read_thermal().await {
+                        let max_temp = thermal
+                            .sensors
+                            .iter()
+                            .map(|s| s.temp_c)
+                            .fold(f32::NEG_INFINITY, f32::max);
 
                         let mut duty = 50.0;
                         for i in 0..curve.len() {
@@ -935,9 +927,9 @@ impl FrameworkControlApp {
             "Command sent (async). Output logging not yet linked to UI.".to_string();
 
         self.runtime.spawn(async move {
-            let args: Vec<&str> = cmd.split_whitespace().collect();
+            let args: Vec<String> = cmd.split_whitespace().map(String::from).collect();
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                match ft.run_raw(&args).await {
+                match ft.run_raw_command(args).await {
                     Ok(o) => tracing::info!("Custom Command Output:\n{}", o),
                     Err(e) => tracing::error!("Custom Command Error: {}", e),
                 }
@@ -969,13 +961,9 @@ impl FrameworkControlApp {
 
             if let Some(v) = &self.versions {
                 ui.horizontal(|ui| {
-                    if let Some(u) = &v.uefi_version {
-                        ui.label(format!("UEFI: {}", u));
-                    }
-                    if let Some(e) = &v.ec_build_version {
-                        ui.separator();
-                        ui.label(format!("EC: {}", e));
-                    }
+                    ui.label(format!("UEFI: {}", v.bios_version));
+                    ui.separator();
+                    ui.label(format!("EC: {}", v.ec_version));
                 });
             }
         });

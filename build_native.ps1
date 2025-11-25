@@ -19,7 +19,7 @@ Set-Location $scriptDir
 Write-Host "[1/2] Initializing build environment..." -ForegroundColor Yellow
 $vsDevCmdPath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"
 
-if (Test-Path $vsDevCmdPath)
+if (Test-Path $vsDevCmdPath) {
     $tempFile = [System.IO.Path]::GetTempFileName()
     cmd /c "`"$vsDevCmdPath`" -arch=amd64 -host_arch=amd64 && set > `"$tempFile`""
     Get-Content $tempFile | ForEach-Object {
@@ -28,6 +28,20 @@ if (Test-Path $vsDevCmdPath)
         }
     }
     Remove-Item $tempFile
+    Write-Host "  Visual Studio environment loaded" -ForegroundColor Green
+}
+else {
+    Write-Host "  VS Build Tools not found, using system compiler" -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+# Build Rust application
+Write-Host "[2/2] Building application..." -ForegroundColor Yellow
+Set-Location "service"
+
+$buildStart = Get-Date
+
 if ($Release) {
     Write-Host "  Building in RELEASE mode..." -ForegroundColor Cyan
     cargo build --release
