@@ -141,7 +141,6 @@ fn load_icon() -> egui::IconData {
 #[derive(Clone)]
 pub struct AppState {
     pub framework_tool: Arc<RwLock<Option<cli::FrameworkTool>>>,
-    pub ryzenadj: Arc<RwLock<Option<cli::RyzenAdj>>>,
     pub config: Arc<RwLock<Config>>,
     pub telemetry_samples: Arc<RwLock<std::collections::VecDeque<TelemetrySample>>>,
     pub cache: Arc<RwLock<CachedData>>,
@@ -158,9 +157,6 @@ impl AppState {
     pub async fn initialize() -> Self {
         let config = Arc::new(RwLock::new(config::load()));
 
-        let ryzenadj = Arc::new(RwLock::new(cli::RyzenAdj::new().await.ok()));
-        Self::spawn_ryzenadj_resolver(ryzenadj.clone());
-
         let framework_tool = Arc::new(RwLock::new(Some(cli::FrameworkTool::new().await)));
         Self::spawn_framework_tool_resolver(framework_tool.clone());
 
@@ -168,37 +164,10 @@ impl AppState {
 
         Self {
             framework_tool,
-            ryzenadj,
             config,
             telemetry_samples: Arc::new(RwLock::new(Default::default())),
             cache,
         }
-    }
-
-    fn spawn_ryzenadj_resolver(ryz_lock: Arc<RwLock<Option<cli::RyzenAdj>>>) {
-        tokio::spawn(async move {
-            use tokio::time::{sleep, Duration};
-            let mut _consecutive_errors = 0u32;
-            loop {
-                let is_missing = { ryz_lock.read().await.is_none() };
-                if is_missing {
-                    match cli::RyzenAdj::new().await {
-                        Ok(new_ryz) => {
-                            *ryz_lock.write().await = Some(new_ryz);
-                            tracing::info!("RyzenAdj is now available");
-                            _consecutive_errors = 0;
-                        }
-                        Err(e) => {
-                            _consecutive_errors += 1;
-                            if _consecutive_errors <= 3 || _consecutive_errors % 10 == 0 {
-                                tracing::debug!("RyzenAdj not available: {}", e);
-                            }
-                        }
-                    }
-                }
-                sleep(Duration::from_secs(5)).await;
-            }
-        });
     }
 
     fn spawn_framework_tool_resolver(ft_lock: Arc<RwLock<Option<cli::FrameworkTool>>>) {
@@ -244,11 +213,10 @@ mod tasks {
 
         // Power settings task
         {
-            let ryz_clone = state.ryzenadj.clone();
             let cfg_clone = state.config.clone();
             let ft_clone = state.framework_tool.clone();
             tokio::spawn(async move {
-                power::run(ryz_clone, cfg_clone, ft_clone).await;
+                power::run(cfg_clone, ft_clone).await;
             });
         }
 
@@ -352,11 +320,7 @@ mod tasks {
 
     mod power {
         use super::*;
-        pub async fn run(
-            ryz: Arc<RwLock<Option<cli::RyzenAdj>>>,
-            cfg: Arc<RwLock<Config>>,
-            ft: Arc<RwLock<Option<cli::FrameworkTool>>>,
-        ) {
+        pub async fn run(cfg: Arc<RwLock<Config>>, ft: Arc<RwLock<Option<cli::FrameworkTool>>>) {
             loop {
                 let (ac_profile, bat_profile) = {
                     let c = cfg.read().await;
@@ -375,21 +339,6 @@ mod tasks {
                 };
 
                 let profile = if is_ac { ac_profile } else { bat_profile };
-
-                if let Some(p) = profile {
-                    if let Some(r) = ryz.read().await.as_ref() {
-                        if let Some(tdp) = p.tdp_watts {
-                            if tdp.enabled {
-                                let _ = r.set_tdp_watts(tdp.value).await;
-                            }
-                        }
-                        if let Some(temp) = p.thermal_limit_c {
-                            if temp.enabled {
-                                let _ = r.set_thermal_limit_c(temp.value).await;
-                            }
-                        }
-                    }
-                }
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
@@ -457,8 +406,6 @@ struct FrameworkControlApp {
     state: AppState,
     runtime: tokio::runtime::Runtime,
 
-    // Tray Icon
-    tray_icon: Option<TrayIcon>,
     start_on_boot: bool,
 
     // Cached data
@@ -545,27 +492,12 @@ impl FrameworkControlApp {
 
         cc.egui_ctx.set_style(style);
 
-        // Initialize Tray Icon
-        let icon_data = load_icon();
-        let tray_icon = if let Ok(icon) =
-            Icon::from_rgba(icon_data.rgba.clone(), icon_data.width, icon_data.height)
-        {
-            TrayIconBuilder::new()
-                .with_tooltip("Framework Control")
-                .with_icon(icon)
-                .build()
-                .ok()
-        } else {
-            None
-        };
-
         // Check startup status
         let start_on_boot = check_start_on_boot();
 
         Self {
             state,
             runtime,
-            tray_icon,
             start_on_boot,
             thermal_data: None,
             power_data: None,
@@ -613,21 +545,6 @@ impl FrameworkControlApp {
 
 impl eframe::App for FrameworkControlApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Handle Tray Events
-        if let Some(_tray) = &self.tray_icon {
-            if let Ok(_event) = tray_icon::TrayIconEvent::receiver().try_recv() {
-                // If tray icon clicked, restore window
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-        }
-
-        // Handle Close Request -> Minimize to Tray
-        if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        }
-
         // Update data from background
         self.update_data(ctx);
 
