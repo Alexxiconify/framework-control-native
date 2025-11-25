@@ -1,6 +1,5 @@
 use crate::cli::ryzen_adj_parser::{self, RyzenAdjInfo};
 use crate::utils::global_cache;
-use crate::utils::{download as dl, github as gh};
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::info;
@@ -150,92 +149,4 @@ async fn resolve_ryzenadj() -> Result<String, String> {
     }
 
     Err("ryzenadj not found".into())
-}
-
-/// Fallback: direct download of ryzenadj from GitHub Releases (Windows/Linux)
-pub async fn attempt_install_via_direct_download() -> Result<(), String> {
-    // Always download next to the service binary to avoid hardcoded system paths
-    let base_dir = match std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-    {
-        Some(p) => p,
-        None => return Err("could not resolve service directory for direct download".into()),
-    };
-    #[cfg(target_os = "windows")]
-    let ext: &str = ".exe";
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let ext: &str = "";
-    let filename = format!("ryzenadj{}", ext);
-
-    // Try to find a direct .exe (Windows) or bare binary asset
-    let url = gh::get_latest_release_url_ending_with("FlyGoat", "RyzenAdj", &[filename.as_str()])
-        .await
-        .map_err(|e| format!("failed to resolve ryzenadj asset: {e}"))?
-        .ok_or_else(|| "ryzenadj asset not found in latest release".to_string())?;
-    info!(
-        "Attempting direct download of ryzenadj into '{}' from '{}'",
-        base_dir.to_string_lossy(),
-        url
-    );
-    let final_path = dl::download_to_path(&url, &base_dir.to_string_lossy().to_string()).await?;
-
-    if let Ok(meta) = std::fs::metadata(&final_path) {
-        info!("ryzenadj downloaded size: {} bytes", meta.len());
-    }
-    // If we extracted a directory, normalize its name to a stable folder: "ryzenadj"
-    let final_p = std::path::Path::new(&final_path);
-    if final_p.is_dir() {
-        let stable_dir = base_dir.join("ryzenadj");
-        if stable_dir != final_p {
-            if stable_dir.exists() {
-                info!(
-                    "existing ryzenadj dir found at '{}', merging new contents",
-                    stable_dir.to_string_lossy()
-                );
-                crate::utils::fs::copy_dir_replace(&final_p, &stable_dir);
-                // Best-effort cleanup of temporary extracted directory
-                let _ = std::fs::remove_dir_all(&final_p);
-            } else {
-                std::fs::rename(&final_p, &stable_dir)
-                    .map_err(|e| format!("failed to move install dir into stable location: {e}"))?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Remove any ryzenadj artifacts that we may have downloaded alongside the service.
-/// This targets both a nested `ryzenadj/` directory and a root-level `ryzenadj(.exe)` file.
-pub async fn remove_installed_files() -> Result<(), String> {
-    // Determine base directory next to the running service binary
-    let base_dir = match std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-    {
-        Some(p) => p,
-        None => return Err("could not resolve service directory for uninstall".into()),
-    };
-
-    // Remove nested ryzenadj directory if present
-    let nested_dir = base_dir.join("ryzenadj");
-    if nested_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&nested_dir) {
-            return Err(format!("failed to remove ryzenadj dir: {e}"));
-        }
-    }
-
-    // Remove root-level binary if present (Windows: .exe, others: no extension)
-    let root_bin = if cfg!(windows) {
-        base_dir.join("ryzenadj.exe")
-    } else {
-        base_dir.join("ryzenadj")
-    };
-    if root_bin.exists() {
-        if let Err(e) = std::fs::remove_file(&root_bin) {
-            return Err(format!("failed to remove ryzenadj binary: {e}"));
-        }
-    }
-
-    Ok(())
 }

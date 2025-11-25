@@ -86,114 +86,58 @@ $ReadmePath = Resolve-Path "$ProjectRoot\README.md"
 $LicensePath = Resolve-Path "$ProjectRoot\LICENSE"
 # Create WiX source file
 $WixSource = @"
-<?xml version='1.0' encoding='windows-1252'?>
-<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
-  <Product Name='Framework Control'
-           Id='*'
-           UpgradeCode='$ProductGuid'
-           Language='1033'
-           Codepage='1252'
-           Version='0.4.2'
-           Manufacturer='Framework Control'>
-    <Package Id='*'
-             Keywords='Installer'
-             Description='Framework Control - Native laptop control with fan curve editor'
-             Manufacturer='Framework Control'
-             InstallerVersion='200'
-             Languages='1033'
-             Compressed='yes'
-             SummaryCodepage='1252' />
-    <Media Id='1'
-           Cabinet='FrameworkControl.cab'
-           EmbedCab='yes'
-           DiskPrompt='CD-ROM #1' />
-    <Property Id='DiskPrompt' Value='Framework Control Installation' />
-    <Directory Id='TARGETDIR' Name='SourceDir'>
-      <Directory Id='ProgramFilesFolder' Name='PFiles'>
-        <Directory Id='INSTALLDIR' Name='FrameworkControl'>
-          <Component Id='MainExecutable' Guid='$MainExeGuid'>
-            <File Id='FrameworkControlEXE'
-                  Name='framework-control.exe'
-                  DiskId='1'
-                  Source='$ServiceExePath'
-                  KeyPath='yes'>
-              <Shortcut Id='startmenu'
-                        Directory='ProgramMenuDir'
-                        Name='Framework Control'
-                        WorkingDirectory='INSTALLDIR'
-                        Icon='FrameworkControl.exe'
-                        IconIndex='0'
-                        Advertise='yes' />
-            </File>
-            <!-- Service Installation -->
-            <ServiceInstall Id='FrameworkControlService'
-                           Type='ownProcess'
-                           Name='FrameworkControlService'
-                           DisplayName='Framework Control Service'
-                           Description='Manages Framework laptop fan curves and power settings'
-                           Start='auto'
-                           Account='LocalSystem'
-                           ErrorControl='normal'
-                           Arguments='--service'
-                           Interactive='no'>
-              <util:ServiceConfig FirstFailureActionType='restart'
-                                 SecondFailureActionType='restart'
-                                 ThirdFailureActionType='restart'
-                                 RestartServiceDelayInSeconds='60'
-                                 xmlns:util='http://schemas.microsoft.com/wix/UtilExtension' />
-            </ServiceInstall>
-            <ServiceControl Id='StartService'
-                           Name='FrameworkControlService'
-                           Start='install'
-                           Stop='both'
-                           Remove='uninstall'
-                           Wait='yes' />
-          </Component>
-          <Component Id='ConfigDirectory' Guid='$ConfigDirGuid'>
-            <CreateFolder />
-          </Component>
-          <Component Id='ReadmeFile' Guid='$ReadmeGuid'>
-            <File Id='README'
-                  Name='README.md'
-                  DiskId='1'
-                  Source='$ReadmePath'
-                  KeyPath='yes' />
-          </Component>
-          <Component Id='LicenseFile' Guid='$LicenseGuid'>
-            <File Id='LICENSE'
-                  Name='LICENSE'
-                  DiskId='1'
-                  Source='$LicensePath'
-                  KeyPath='yes' />
-          </Component>
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product Id="$ProductGuid" Name="Framework Control" Language="1033" Version="0.4.2.0" Manufacturer="Framework Control" UpgradeCode="PUT-GUID-HERE">
+        <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+
+        <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+        <MediaTemplate EmbedCab="yes" />
+
+        <Feature Id="ProductFeature" Title="Framework Control" Level="1">
+            <ComponentGroupRef Id="ProductComponents" />
+            <ComponentRef Id="ApplicationShortcut" />
+        </Feature>
+    </Product>
+
+    <Fragment>
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFilesFolder">
+                <Directory Id="INSTALLFOLDER" Name="FrameworkControl" />
+            </Directory>
+            <Directory Id="ProgramMenuFolder">
+                <Directory Id="ApplicationProgramsFolder" Name="Framework Control"/>
+            </Directory>
         </Directory>
-      </Directory>
-      <Directory Id='ProgramMenuFolder' Name='Programs'>
-        <Directory Id='ProgramMenuDir' Name='Framework Control'>
-          <Component Id='ProgramMenuDir' Guid='$MenuDirGuid'>
-            <RemoveFolder Id='ProgramMenuDir' On='uninstall' />
-            <RegistryValue Root='HKCU'
-                          Key='Software\FrameworkControl'
-                          Type='string'
-                          Value=''
-                          KeyPath='yes' />
-          </Component>
-        </Directory>
-      </Directory>
-    </Directory>
-    <Feature Id='Complete' Level='1'>
-      <ComponentRef Id='MainExecutable' />
-      <ComponentRef Id='ConfigDirectory' />
-      <ComponentRef Id='ReadmeFile' />
-      <ComponentRef Id='LicenseFile' />
-      <ComponentRef Id='ProgramMenuDir' />
-    </Feature>
-    <Icon Id='FrameworkControl.exe' SourceFile='$ServiceExePath' />
-    <UIRef Id='WixUI_Minimal' />
-    <WixVariable Id='WixUILicenseRtf' Value='$LicensePath' />
-  </Product>
+    </Fragment>
+
+    <Fragment>
+        <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+            <Component Id="ProductComponent" Guid="$MainExeGuid">
+                <File Source="$ServiceExePath" Id="FrameworkControlEXE" KeyPath="yes" />
+                <ServiceInstall Id="ServiceInstaller" Type="ownProcess" Name="FrameworkControl" DisplayName="Framework Control Service" Description="Manages Framework Laptop hardware settings" Start="auto" Account="LocalSystem" ErrorControl="normal" />
+                <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="FrameworkControl" Wait="yes" />
+            </Component>
+            <Component Id="Readme" Guid="$ReadmeGuid">
+                <File Source="$ReadmePath" Id="ReadmeMD" />
+            </Component>
+            <Component Id="License" Guid="$LicenseGuid">
+                <File Source="$LicensePath" Id="LicenseFile" />
+            </Component>
+        </ComponentGroup>
+    </Fragment>
+
+    <Fragment>
+        <DirectoryRef Id="ApplicationProgramsFolder">
+            <Component Id="ApplicationShortcut" Guid="$MenuDirGuid">
+                <Shortcut Id="ApplicationStartMenuShortcut" Name="Framework Control" Description="Control your Framework Laptop" Target="[INSTALLFOLDER]framework-control.exe" WorkingDirectory="INSTALLFOLDER"/>
+                <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall"/>
+                <RegistryValue Root="HKCU" Key="Software\FrameworkControl" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+            </Component>
+        </DirectoryRef>
+    </Fragment>
 </Wix>
-"@
+"@.Replace("PUT-GUID-HERE", [guid]::NewGuid().ToString())
 $WixSource | Out-File "$WixDir\FrameworkControl.wxs" -Encoding UTF8
 Write-Host "  [OK] WiX configuration created" -ForegroundColor Green
 # Compile WiX
@@ -203,7 +147,7 @@ $env:PATH = "$wixPath;$env:PATH"
 Set-Location $WixDir
 # Candle (compile)
 Write-Host "  Compiling .wxs to .wixobj..." -ForegroundColor Yellow
-& candle.exe "FrameworkControl.wxs" -ext WixUtilExtension 2>&1 | Out-Null
+& candle.exe "FrameworkControl.wxs" -ext WixUtilExtension
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] WiX compilation failed!" -ForegroundColor Red
     Set-Location $ProjectRoot
@@ -214,7 +158,7 @@ Write-Host "  Linking to create .msi..." -ForegroundColor Yellow
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
-& light.exe "FrameworkControl.wixobj" -ext WixUtilExtension -ext WixUIExtension -out "$OutputDir\FrameworkControl-0.4.2.msi" -sval 2>&1 | Out-Null
+& light.exe "FrameworkControl.wixobj" -ext WixUtilExtension -ext WixUIExtension -out "$OutputDir\FrameworkControl-0.4.2.msi" -sval
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] WiX linking failed!" -ForegroundColor Red
     Set-Location $ProjectRoot
@@ -223,7 +167,6 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "  [OK] MSI created successfully" -ForegroundColor Green
 Set-Location $ProjectRoot
 # Summary
-Write-Host ""
 Write-Host "[5/5] Complete!" -ForegroundColor Cyan
 $MsiPath = Resolve-Path "$OutputDir\FrameworkControl-0.4.2.msi"
 $MsiSize = [math]::Round((Get-Item $MsiPath).Length / 1MB, 2)

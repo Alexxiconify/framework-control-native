@@ -72,3 +72,6 @@ config.json
 *~
 *.orig
 *.rej
+*.io
+*.tmp
+.DS_Store

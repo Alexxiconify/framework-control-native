@@ -17,8 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // If run with --service flag, run as Windows Service
     if args.len() > 1 && args[1] == "--service" {
-        return windows_service::run_service()
-            .map_err(|e| format!("Service error: {}", e).into());
+        return windows_service::run_service().map_err(|e| format!("Service error: {}", e).into());
     }
 
     // Otherwise run GUI
@@ -43,9 +42,7 @@ fn run_gui() -> Result<(), eframe::Error> {
 
     // Initialize logging
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .without_time()
         .init();
 
@@ -57,6 +54,29 @@ fn run_gui() -> Result<(), eframe::Error> {
     let state_clone = state.clone();
     runtime.spawn(async move {
         tasks::boot(&state_clone).await;
+    });
+
+    // Start background data poller (Performance Fix)
+    let state_clone_poll = state.clone();
+    runtime.spawn(async move {
+        loop {
+            if let Some(ft) = state_clone_poll.framework_tool.read().await.as_ref() {
+                let mut cache = state_clone_poll.cache.write().await;
+
+                if let Ok(thermal) = ft.thermal().await {
+                    cache.thermal = Some(thermal);
+                }
+                if let Ok(power) = ft.power().await {
+                    cache.power = Some(power);
+                }
+                if cache.versions.is_none() {
+                    if let Ok(v) = ft.versions().await {
+                        cache.versions = Some(v);
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
     });
 
     // Launch GUI
@@ -76,58 +96,59 @@ fn run_gui() -> Result<(), eframe::Error> {
 }
 
 fn load_icon() -> egui::IconData {
-    // 32x32 Framework-style logo icon
-    let icon_size = 32;
-    let mut rgba = vec![0u8; icon_size * icon_size * 4];
+    // 32x32 Framework Gear Icon
+    let width = 32;
+    let height = 32;
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
 
-    // Framework brand colors
-    const ORANGE: [u8; 3] = [255, 102, 0];      // Framework Orange
-    const DARK_BG: [u8; 3] = [28, 28, 30];      // Dark background
-    const GRAY: [u8; 3] = [80, 80, 85];         // Border gray
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+    let radius = 14.0;
 
-    // Create Framework-style "F" logo with modular design
-    for y in 0..icon_size {
-        for x in 0..icon_size {
-            let idx = (y * icon_size + x) * 4;
+    // Framework Orange
+    let orange = [255, 106, 0, 255];
+    // Dark Grey for the "F"
+    let dark = [30, 30, 30, 255];
 
-            // Dark background
-            rgba[idx..idx + 3].copy_from_slice(&DARK_BG);
-            rgba[idx + 3] = 255;
+    for y in 0..height {
+        for x in 0..width {
+            let idx = ((y * width + x) * 4) as usize;
+            let dx = x as f32 - center_x;
+            let dy = y as f32 - center_y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let angle = dy.atan2(dx);
 
-            // Create stylized "F" with modular boxes (Framework style)
-            let in_frame = x >= 2 && x < 30 && y >= 2 && y < 30;
+            // Gear teeth (12 teeth)
+            let teeth = (angle * 12.0).cos();
+            let gear_radius = radius + teeth * 1.5;
 
-            if in_frame {
-                // Vertical bar of F (left side)
-                let in_vertical = x >= 6 && x < 11;
+            if dist <= gear_radius {
+                // Main gear body
+                rgba[idx..idx + 4].copy_from_slice(&orange);
 
-                // Top horizontal bar of F
-                let in_top_bar = y >= 6 && y < 11 && x >= 6 && x < 25;
-
-                // Middle horizontal bar of F
-                let in_mid_bar = y >= 15 && y < 20 && x >= 6 && x < 22;
-
-                // Modular grid pattern (Framework style)
-                let is_module_gap = (x - 6) % 5 == 4 || (y - 6) % 5 == 4;
-
-                if (in_vertical || in_top_bar || in_mid_bar) && !is_module_gap {
-                    rgba[idx..idx + 3].copy_from_slice(&ORANGE);
-                } else if (in_vertical || in_top_bar || in_mid_bar) && is_module_gap {
-                    rgba[idx..idx + 3].copy_from_slice(&GRAY);
-                }
+                // "F" cutout (simplified)
+                if x >= 12 && x <= 16 && y >= 8 && y <= 24 {
+                    rgba[idx..idx + 4].copy_from_slice(&dark);
+                } // Vertical
+                if x >= 16 && x <= 22 && y >= 8 && y <= 12 {
+                    rgba[idx..idx + 4].copy_from_slice(&dark);
+                } // Top bar
+                if x >= 16 && x <= 20 && y >= 16 && y <= 19 {
+                    rgba[idx..idx + 4].copy_from_slice(&dark);
+                } // Mid bar
             }
 
-            // Border
-            if x < 2 || x >= 30 || y < 2 || y >= 30 {
-                rgba[idx..idx + 3].copy_from_slice(&GRAY);
+            // Antialiasing/Transparency for outside
+            if dist > gear_radius {
+                rgba[idx + 3] = 0;
             }
         }
     }
 
     egui::IconData {
         rgba,
-        width: icon_size as u32,
-        height: icon_size as u32,
+        width,
+        height,
     }
 }
 
@@ -138,6 +159,14 @@ pub struct AppState {
     pub ryzenadj: Arc<RwLock<Option<cli::RyzenAdj>>>,
     pub config: Arc<RwLock<Config>>,
     pub telemetry_samples: Arc<RwLock<std::collections::VecDeque<TelemetrySample>>>,
+    pub cache: Arc<RwLock<CachedData>>,
+}
+
+#[derive(Default, Clone)]
+pub struct CachedData {
+    pub thermal: Option<cli::framework_tool_parser::ThermalParsed>,
+    pub power: Option<cli::framework_tool_parser::PowerBatteryInfo>,
+    pub versions: Option<cli::framework_tool_parser::VersionsParsed>,
 }
 
 impl AppState {
@@ -148,15 +177,18 @@ impl AppState {
         Self::spawn_ryzenadj_resolver(ryzenadj.clone());
 
         let framework_tool = Arc::new(RwLock::new(
-            cli::framework_tool::resolve_or_install().await.ok()
+            cli::framework_tool::resolve_or_install().await.ok(),
         ));
         Self::spawn_framework_tool_resolver(framework_tool.clone());
+
+        let cache = Arc::new(RwLock::new(CachedData::default()));
 
         Self {
             framework_tool,
             ryzenadj,
             config,
             telemetry_samples: Arc::new(RwLock::new(Default::default())),
+            cache,
         }
     }
 
@@ -200,21 +232,19 @@ impl AppState {
                             consecutive_errors = 0;
                         }
                     }
-                    None => {
-                        match cli::FrameworkTool::new().await {
-                            Ok(cli) => {
-                                *ft_lock.write().await = Some(cli);
-                                tracing::info!("framework_tool is now available");
-                                consecutive_errors = 0;
-                            }
-                            Err(e) => {
-                                consecutive_errors += 1;
-                                if consecutive_errors <= 3 || consecutive_errors % 10 == 0 {
-                                    tracing::debug!("framework_tool not available: {}", e);
-                                }
+                    None => match cli::FrameworkTool::new().await {
+                        Ok(cli) => {
+                            *ft_lock.write().await = Some(cli);
+                            tracing::info!("framework_tool is now available");
+                            consecutive_errors = 0;
+                        }
+                        Err(e) => {
+                            consecutive_errors += 1;
+                            if consecutive_errors <= 3 || consecutive_errors % 10 == 0 {
+                                tracing::debug!("framework_tool not available: {}", e);
                             }
                         }
-                    }
+                    },
                 }
                 sleep(Duration::from_secs(5)).await;
             }
@@ -323,7 +353,6 @@ struct FrameworkControlApp {
     auto_fan: bool,
     fan_curve_enabled: bool,
     fan_curve: Vec<(f32, f32)>, // (temp_celsius, duty_percent)
-    editing_curve: bool,
 
     // Power settings
     tdp_watts: u32,
@@ -336,37 +365,48 @@ struct FrameworkControlApp {
 
     // Status messages
     status_message: String,
-    last_update: std::time::Instant,
 }
 
 impl FrameworkControlApp {
-    fn new(cc: &eframe::CreationContext<'_>, state: AppState, runtime: tokio::runtime::Runtime) -> Self {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        state: AppState,
+        runtime: tokio::runtime::Runtime,
+    ) -> Self {
         // Set dark theme with Framework colors
         let mut style = (*cc.egui_ctx.style()).clone();
 
-        // Framework brand colors
-        let framework_orange = egui::Color32::from_rgb(255, 102, 0);
-        let dark_bg = egui::Color32::from_rgb(28, 28, 30);
-        let darker_bg = egui::Color32::from_rgb(18, 18, 20);
-        let panel_bg = egui::Color32::from_rgb(38, 38, 42);
-        let text_color = egui::Color32::from_rgb(235, 235, 245);
+        // Premium Dark Theme
+        let framework_orange = egui::Color32::from_rgb(255, 106, 0);
+        let bg_color = egui::Color32::from_rgb(10, 10, 12); // Almost black
+        let panel_color = egui::Color32::from_rgb(18, 18, 20); // Very dark gray
+        let text_color = egui::Color32::from_rgb(240, 240, 245);
+        let border_color = egui::Color32::from_rgb(40, 40, 45);
 
         // Apply dark theme
         style.visuals.dark_mode = true;
         style.visuals.override_text_color = Some(text_color);
-        style.visuals.panel_fill = panel_bg;
-        style.visuals.window_fill = dark_bg;
-        style.visuals.extreme_bg_color = darker_bg;
-        style.visuals.faint_bg_color = panel_bg;
+        style.visuals.panel_fill = panel_color;
+        style.visuals.window_fill = bg_color;
+        style.visuals.extreme_bg_color = egui::Color32::BLACK;
+        style.visuals.faint_bg_color = panel_color;
+
+        // Borders
+        style.visuals.window_stroke = egui::Stroke::new(1.0, border_color);
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, border_color);
 
         // Framework orange accents
-        style.visuals.selection.bg_fill = framework_orange.linear_multiply(0.3);
+        style.visuals.selection.bg_fill = framework_orange;
         style.visuals.selection.stroke = egui::Stroke::new(1.0, framework_orange);
-        style.visuals.widgets.hovered.bg_fill = framework_orange.linear_multiply(0.15);
-        style.visuals.widgets.active.bg_fill = framework_orange.linear_multiply(0.25);
-        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 65));
-        style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, framework_orange);
+
+        style.visuals.widgets.hovered.bg_fill = framework_orange.linear_multiply(0.2);
+        style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, framework_orange);
+
+        style.visuals.widgets.active.bg_fill = framework_orange.linear_multiply(0.4);
         style.visuals.widgets.active.bg_stroke = egui::Stroke::new(2.0, framework_orange);
+
+        style.visuals.widgets.inactive.bg_fill = panel_color.linear_multiply(1.5); // Slightly lighter than panel
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border_color);
 
         // Hyperlinks
         style.visuals.hyperlink_color = framework_orange;
@@ -374,6 +414,10 @@ impl FrameworkControlApp {
         // Window rounding
         style.visuals.window_rounding = 8.0.into();
         style.visuals.menu_rounding = 6.0.into();
+
+        // Spacing
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(10.0, 6.0);
 
         cc.egui_ctx.set_style(style);
 
@@ -395,35 +439,29 @@ impl FrameworkControlApp {
                 (80.0, 80.0),  // 80°C -> 80% duty
                 (90.0, 100.0), // 90°C -> 100% duty
             ],
-            editing_curve: false,
             tdp_watts: 15,
             thermal_limit: 80,
             power_enabled: false,
             charge_limit: 80,
             charge_limit_enabled: false,
             status_message: String::new(),
-            last_update: std::time::Instant::now(),
         }
     }
 
     fn update_data(&mut self, ctx: &egui::Context) {
-        // Update thermal data
-        if let Some(ft) = self.runtime.block_on(async {
-            self.state.framework_tool.read().await.clone()
-        }) {
-            if let Ok(thermal) = self.runtime.block_on(ft.thermal()) {
-                self.thermal_data = Some(thermal);
+        // Non-blocking update from cache
+        if let Ok(cache) = self.state.cache.try_read() {
+            if let Some(thermal) = &cache.thermal {
+                self.thermal_data = Some(thermal.clone());
             }
-            if let Ok(power) = self.runtime.block_on(ft.power()) {
-                self.power_data = Some(power);
+            if let Some(power) = &cache.power {
+                self.power_data = Some(power.clone());
             }
-            if self.versions.is_none() {
-                if let Ok(v) = self.runtime.block_on(ft.versions()) {
-                    self.versions = Some(v);
-                }
+            if let Some(versions) = &cache.versions {
+                self.versions = Some(versions.clone());
             }
         }
-        ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
     }
 }
 
@@ -438,9 +476,11 @@ impl eframe::App for FrameworkControlApp {
                 ui.heading("⚡ Framework Control");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(versions) = &self.versions {
-                        ui.label(format!("EC: {} | UEFI: {}",
+                        ui.label(format!(
+                            "EC: {} | UEFI: {}",
                             versions.ec_build_version.as_deref().unwrap_or("?"),
-                            versions.uefi_version.as_deref().unwrap_or("?")));
+                            versions.uefi_version.as_deref().unwrap_or("?")
+                        ));
                     }
                 });
             });
@@ -567,7 +607,11 @@ impl FrameworkControlApp {
                     .spacing([40.0, 4.0])
                     .show(ui, |ui| {
                         ui.label("Status");
-                        ui.label(if power.charging.unwrap_or(false) { "⚡ Charging" } else { "🔋 Battery" });
+                        ui.label(if power.charging.unwrap_or(false) {
+                            "⚡ Charging"
+                        } else {
+                            "🔋 Battery"
+                        });
                         ui.end_row();
 
                         if let Some(pct) = power.percentage {
@@ -590,16 +634,23 @@ impl FrameworkControlApp {
         ui.group(|ui| {
             ui.heading("🌡️ Temperatures");
             if let Some(thermal) = &self.thermal_data {
-                egui::Grid::new("temps").num_columns(2).spacing([40.0, 4.0]).show(ui, |ui| {
-                    for (name, temp) in &thermal.temps {
-                        ui.label(name);
-                        let color = if *temp > 85 { egui::Color32::RED }
-                                   else if *temp > 75 { egui::Color32::from_rgb(255, 165, 0) }
-                                   else { egui::Color32::from_rgb(0, 200, 0) };
-                        ui.colored_label(color, format!("{}°C", temp));
-                        ui.end_row();
-                    }
-                });
+                egui::Grid::new("temps")
+                    .num_columns(2)
+                    .spacing([40.0, 4.0])
+                    .show(ui, |ui| {
+                        for (name, temp) in &thermal.temps {
+                            ui.label(name);
+                            let color = if *temp > 85 {
+                                egui::Color32::RED
+                            } else if *temp > 75 {
+                                egui::Color32::from_rgb(255, 165, 0)
+                            } else {
+                                egui::Color32::from_rgb(0, 200, 0)
+                            };
+                            ui.colored_label(color, format!("{}°C", temp));
+                            ui.end_row();
+                        }
+                    });
             } else {
                 ui.label("Install framework_tool");
             }
@@ -610,15 +661,23 @@ impl FrameworkControlApp {
         ui.group(|ui| {
             ui.heading("🌀 Fans");
             if let Some(thermal) = &self.thermal_data {
-                egui::Grid::new("fans").num_columns(2).spacing([40.0, 4.0]).show(ui, |ui| {
-                    for (idx, rpm) in thermal.rpms.iter().enumerate() {
-                        ui.label(format!("Fan {}", idx + 1));
-                        ui.colored_label(if *rpm > 4000 { egui::Color32::from_rgb(255, 165, 0) }
-                                       else { egui::Color32::from_rgb(100, 200, 255) },
-                                       format!("{} RPM", rpm));
-                        ui.end_row();
-                    }
-                });
+                egui::Grid::new("fans")
+                    .num_columns(2)
+                    .spacing([40.0, 4.0])
+                    .show(ui, |ui| {
+                        for (idx, rpm) in thermal.rpms.iter().enumerate() {
+                            ui.label(format!("Fan {}", idx + 1));
+                            ui.colored_label(
+                                if *rpm > 4000 {
+                                    egui::Color32::from_rgb(255, 165, 0)
+                                } else {
+                                    egui::Color32::from_rgb(100, 200, 255)
+                                },
+                                format!("{} RPM", rpm),
+                            );
+                            ui.end_row();
+                        }
+                    });
             }
         });
     }
@@ -627,26 +686,40 @@ impl FrameworkControlApp {
         ui.group(|ui| {
             ui.heading("🔋 Power");
             if let Some(power) = &self.power_data {
-                egui::Grid::new("power").num_columns(2).spacing([40.0, 4.0]).show(ui, |ui| {
-                    ui.label("Status");
-                    ui.colored_label(
-                        if power.charging.unwrap_or(false) { egui::Color32::from_rgb(0, 200, 0) }
-                        else { egui::Color32::from_rgb(100, 150, 255) },
-                        if power.charging.unwrap_or(false) { "⚡ Charging" } else { "🔋 Battery" }
-                    );
-                    ui.end_row();
-
-                    if let Some(pct) = power.percentage {
-                        ui.label("Level");
+                egui::Grid::new("power")
+                    .num_columns(2)
+                    .spacing([40.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Status");
                         ui.colored_label(
-                            if pct < 20 { egui::Color32::RED }
-                            else if pct < 50 { egui::Color32::from_rgb(255, 165, 0) }
-                            else { egui::Color32::from_rgb(0, 200, 0) },
-                            format!("{}%", pct)
+                            if power.charging.unwrap_or(false) {
+                                egui::Color32::from_rgb(0, 200, 0)
+                            } else {
+                                egui::Color32::from_rgb(100, 150, 255)
+                            },
+                            if power.charging.unwrap_or(false) {
+                                "⚡ Charging"
+                            } else {
+                                "🔋 Battery"
+                            },
                         );
                         ui.end_row();
-                    }
-                });
+
+                        if let Some(pct) = power.percentage {
+                            ui.label("Level");
+                            ui.colored_label(
+                                if pct < 20 {
+                                    egui::Color32::RED
+                                } else if pct < 50 {
+                                    egui::Color32::from_rgb(255, 165, 0)
+                                } else {
+                                    egui::Color32::from_rgb(0, 200, 0)
+                                },
+                                format!("{}%", pct),
+                            );
+                            ui.end_row();
+                        }
+                    });
             }
         });
     }
@@ -657,15 +730,24 @@ impl FrameworkControlApp {
         ui.add_space(5.0);
 
         ui.horizontal(|ui| {
-            if ui.radio(self.auto_fan && !self.fan_curve_enabled, "Auto").clicked() {
+            if ui
+                .radio(self.auto_fan && !self.fan_curve_enabled, "Auto")
+                .clicked()
+            {
                 self.auto_fan = true;
                 self.fan_curve_enabled = false;
             }
-            if ui.radio(!self.auto_fan && !self.fan_curve_enabled, "Manual").clicked() {
+            if ui
+                .radio(!self.auto_fan && !self.fan_curve_enabled, "Manual")
+                .clicked()
+            {
                 self.auto_fan = false;
                 self.fan_curve_enabled = false;
             }
-            if ui.radio(!self.auto_fan && self.fan_curve_enabled, "Curve").clicked() {
+            if ui
+                .radio(!self.auto_fan && self.fan_curve_enabled, "Curve")
+                .clicked()
+            {
                 self.auto_fan = false;
                 self.fan_curve_enabled = true;
             }
@@ -687,34 +769,39 @@ impl FrameworkControlApp {
             ui.label("Grid-based Fan Curve:");
             ui.add_space(5.0);
 
-            egui::Grid::new("curve").num_columns(3).spacing([10.0, 5.0]).striped(true).show(ui, |ui| {
-                ui.label("Temp (°C)");
-                ui.label("Fan (%)");
-                ui.label("");
-                ui.end_row();
-
-                let mut to_remove = None;
-                let curve_len = self.fan_curve.len();
-                for (idx, (temp, duty)) in self.fan_curve.iter_mut().enumerate() {
-                    ui.add(egui::DragValue::new(temp).speed(1.0).clamp_range(20.0..=100.0));
-                    ui.add(egui::DragValue::new(duty).speed(1.0).clamp_range(0.0..=100.0));
-                    if ui.small_button("✖").clicked() && curve_len > 2 {
-                        to_remove = Some(idx);
-                    }
+            egui::Grid::new("curve")
+                .num_columns(3)
+                .spacing([10.0, 5.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Temp (°C)");
+                    ui.label("Fan (%)");
+                    ui.label("");
                     ui.end_row();
-                }
 
-                if let Some(idx) = to_remove {
-                    self.fan_curve.remove(idx);
-                }
-            });
+                    let mut to_remove = None;
+                    let curve_len = self.fan_curve.len();
+                    for (idx, (temp, duty)) in self.fan_curve.iter_mut().enumerate() {
+                        ui.add(egui::DragValue::new(temp).speed(1.0).range(20.0..=100.0));
+                        ui.add(egui::DragValue::new(duty).speed(1.0).range(0.0..=100.0));
+                        if ui.small_button("✖").clicked() && curve_len > 2 {
+                            to_remove = Some(idx);
+                        }
+                        ui.end_row();
+                    }
+
+                    if let Some(idx) = to_remove {
+                        self.fan_curve.remove(idx);
+                    }
+                });
 
             ui.add_space(5.0);
             ui.horizontal(|ui| {
                 if ui.button("➕ Add Point").clicked() && self.fan_curve.len() < 10 {
                     let last = self.fan_curve.last().map(|(t, _)| *t).unwrap_or(50.0);
                     self.fan_curve.push(((last + 10.0).min(100.0), 50.0));
-                    self.fan_curve.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                    self.fan_curve
+                        .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                 }
                 if ui.button("⚡ Apply Curve").clicked() {
                     self.apply_fan_curve();
@@ -790,7 +877,8 @@ impl FrameworkControlApp {
     }
 
     fn apply_fan_curve(&mut self) {
-        self.fan_curve.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        self.fan_curve
+            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let curve = self.fan_curve.clone();
         let state = self.state.clone();
 
@@ -810,11 +898,14 @@ impl FrameworkControlApp {
                                 duty = curve[i].1;
                                 break;
                             }
-                            if i < curve.len() - 1 && max_temp >= curve[i].0 && max_temp <= curve[i+1].0 {
+                            if i < curve.len() - 1
+                                && max_temp >= curve[i].0
+                                && max_temp <= curve[i + 1].0
+                            {
                                 let t1 = curve[i].0;
-                                let t2 = curve[i+1].0;
+                                let t2 = curve[i + 1].0;
                                 let d1 = curve[i].1;
-                                let d2 = curve[i+1].1;
+                                let d2 = curve[i + 1].1;
                                 let ratio = (max_temp - t1) / (t2 - t1);
                                 duty = d1 + (d2 - d1) * ratio;
                                 break;
