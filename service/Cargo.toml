@@ -9,45 +9,54 @@ name = "framework-control"
 path = "src/main.rs"
 
 [dependencies]
-# Core async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "fs"] }
+# Core async runtime - optimized features only
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "fs"], default-features = false }
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1", features = ["derive"], default-features = false }
+serde_json = { version = "1", default-features = false, features = ["std"] }
 
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+# Logging - minimal features
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"], default-features = false }
 
-# System info
-sysinfo = { version = "0.30", features = ["multithread"] }
+# System info - minimal features
+sysinfo = { version = "0.30", default-features = false, features = ["multithread"] }
 
-# HTTP client (for updates only)
+# HTTP client - only for updates, minimal features
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
-# Archive handling
+# Archive handling - minimal
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 # Windows Service support
-windows-service = "0.7"
+windows-service = { version = "0.7", default-features = false }
 
-# Native GUI - Latest stable versions
+# Native GUI - Optimized for performance
 eframe = { version = "0.28", default-features = false, features = ["default_fonts", "glow"] }
-egui = "0.28"
-egui_plot = "0.28"
+egui = { version = "0.28", default-features = false }
+egui_plot = { version = "0.28", default-features = false }
 
 [profile.release]
-opt-level = "z"         # Optimize for size
-lto = "thin"            # Faster LTO
-codegen-units = 16      # Faster builds (vs 1)
-strip = true            # Strip symbols
+opt-level = 3           # Full optimization (changed from "z" for speed)
+lto = "thin"            # Link-time optimization for faster builds
+codegen-units = 1       # Better optimization (slower build, faster runtime)
+strip = true            # Strip symbols for smaller binary
 panic = "abort"         # Smaller binary
+incremental = false     # Better optimization
 
 [profile.dev]
-opt-level = 1           # Faster dev builds
-incremental = true      # Enable incremental compilation
-debug = false           # No debug symbols (faster)
+opt-level = 1           # Some optimization for dev
+incremental = true      # Fast rebuilds
+debug = false           # No debug symbols
+split-debuginfo = "unpacked"  # Faster linking
+
+# Fast release profile for testing
+[profile.fast-release]
+inherits = "release"
+opt-level = 2
+codegen-units = 16
+lto = "off"
 
 [package.metadata.wix]
 eula = false

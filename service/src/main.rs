@@ -76,26 +76,50 @@ fn run_gui() -> Result<(), eframe::Error> {
 }
 
 fn load_icon() -> egui::IconData {
-    // Simple 32x32 icon data (Framework logo colors)
+    // 32x32 Framework-style logo icon
     let icon_size = 32;
     let mut rgba = vec![0u8; icon_size * icon_size * 4];
 
-    // Create a simple orange square with dark border (Framework colors)
+    // Framework brand colors
+    const ORANGE: [u8; 3] = [255, 102, 0];      // Framework Orange
+    const DARK_BG: [u8; 3] = [28, 28, 30];      // Dark background
+    const GRAY: [u8; 3] = [80, 80, 85];         // Border gray
+
+    // Create Framework-style "F" logo with modular design
     for y in 0..icon_size {
         for x in 0..icon_size {
             let idx = (y * icon_size + x) * 4;
-            if x == 0 || x == icon_size - 1 || y == 0 || y == icon_size - 1 {
-                // Dark border
-                rgba[idx] = 40;
-                rgba[idx + 1] = 40;
-                rgba[idx + 2] = 40;
-                rgba[idx + 3] = 255;
-            } else {
-                // Orange fill (Framework brand color)
-                rgba[idx] = 255;
-                rgba[idx + 1] = 102;
-                rgba[idx + 2] = 0;
-                rgba[idx + 3] = 255;
+
+            // Dark background
+            rgba[idx..idx + 3].copy_from_slice(&DARK_BG);
+            rgba[idx + 3] = 255;
+
+            // Create stylized "F" with modular boxes (Framework style)
+            let in_frame = x >= 2 && x < 30 && y >= 2 && y < 30;
+
+            if in_frame {
+                // Vertical bar of F (left side)
+                let in_vertical = x >= 6 && x < 11;
+
+                // Top horizontal bar of F
+                let in_top_bar = y >= 6 && y < 11 && x >= 6 && x < 25;
+
+                // Middle horizontal bar of F
+                let in_mid_bar = y >= 15 && y < 20 && x >= 6 && x < 22;
+
+                // Modular grid pattern (Framework style)
+                let is_module_gap = (x - 6) % 5 == 4 || (y - 6) % 5 == 4;
+
+                if (in_vertical || in_top_bar || in_mid_bar) && !is_module_gap {
+                    rgba[idx..idx + 3].copy_from_slice(&ORANGE);
+                } else if (in_vertical || in_top_bar || in_mid_bar) && is_module_gap {
+                    rgba[idx..idx + 3].copy_from_slice(&GRAY);
+                }
+            }
+
+            // Border
+            if x < 2 || x >= 30 || y < 2 || y >= 30 {
+                rgba[idx..idx + 3].copy_from_slice(&GRAY);
             }
         }
     }
@@ -316,7 +340,43 @@ struct FrameworkControlApp {
 }
 
 impl FrameworkControlApp {
-    fn new(_cc: &eframe::CreationContext<'_>, state: AppState, runtime: tokio::runtime::Runtime) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, state: AppState, runtime: tokio::runtime::Runtime) -> Self {
+        // Set dark theme with Framework colors
+        let mut style = (*cc.egui_ctx.style()).clone();
+
+        // Framework brand colors
+        let framework_orange = egui::Color32::from_rgb(255, 102, 0);
+        let dark_bg = egui::Color32::from_rgb(28, 28, 30);
+        let darker_bg = egui::Color32::from_rgb(18, 18, 20);
+        let panel_bg = egui::Color32::from_rgb(38, 38, 42);
+        let text_color = egui::Color32::from_rgb(235, 235, 245);
+
+        // Apply dark theme
+        style.visuals.dark_mode = true;
+        style.visuals.override_text_color = Some(text_color);
+        style.visuals.panel_fill = panel_bg;
+        style.visuals.window_fill = dark_bg;
+        style.visuals.extreme_bg_color = darker_bg;
+        style.visuals.faint_bg_color = panel_bg;
+
+        // Framework orange accents
+        style.visuals.selection.bg_fill = framework_orange.linear_multiply(0.3);
+        style.visuals.selection.stroke = egui::Stroke::new(1.0, framework_orange);
+        style.visuals.widgets.hovered.bg_fill = framework_orange.linear_multiply(0.15);
+        style.visuals.widgets.active.bg_fill = framework_orange.linear_multiply(0.25);
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 65));
+        style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, framework_orange);
+        style.visuals.widgets.active.bg_stroke = egui::Stroke::new(2.0, framework_orange);
+
+        // Hyperlinks
+        style.visuals.hyperlink_color = framework_orange;
+
+        // Window rounding
+        style.visuals.window_rounding = 8.0.into();
+        style.visuals.menu_rounding = 6.0.into();
+
+        cc.egui_ctx.set_style(style);
+
         Self {
             state,
             runtime,

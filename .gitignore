@@ -1,37 +1,74 @@
-# Rust
+# Rust build artifacts
 service/target/
+target/
 **/*.rs.bk
 *.pdb
+debug/
+release/
 
 # Cargo
 Cargo.lock
-
-# Node
-node_modules/
-dist/
-.cache/
+**/*.profraw
 
 # Build outputs
 *.exe
 *.msi
 *.wixobj
 *.wixpdb
+output/
+service/wix/
 
-# IDE
+# IDE & Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-*
+.vs/
 
-# OS
+# OS specific
 .DS_Store
 Thumbs.db
 desktop.ini
+ehthumbs.db
 
-# Logs
+# Logs & temp files
 *.log
+*.tmp
+*.bak
+*.cache
 
-# Env files
+# Environment & config
 .env
 .env.local
+.env.*.local
+
+# Test artifacts
+coverage/
+*.gcda
+*.gcno
+
+# Documentation builds
+doc/target/
+
+# Framework Control specific
+FrameworkControl/
+framework_tool.exe
+ryzenadj.exe
+config.json
+*.json.tmp
+
+# Windows shortcuts
+*.lnk
+
+# Compressed files
+*.zip
+*.7z
+*.gz
+*.tar
+
+# Backup files
+*~
+*.orig
+*.rej

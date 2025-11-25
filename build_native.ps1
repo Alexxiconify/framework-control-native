@@ -11,7 +11,6 @@ $ErrorActionPreference = "Stop"
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Framework Control - Native GUI Build" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
@@ -64,13 +63,11 @@ $buildTime = ((Get-Date) - $buildStart).TotalSeconds
 Write-Host "  Build completed in $([math]::Round($buildTime, 1))s" -ForegroundColor Green
 
 Set-Location ".."
-Write-Host ""
 
 # Display results
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "Build Complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
-Write-Host ""
 
 $fullPath = Join-Path (Get-Location) "service\$exePath"
 if (Test-Path $fullPath) {
@@ -97,5 +94,3 @@ if (Test-Path $fullPath) {
 } else {
     Write-Host "WARNING: Executable not found at expected location" -ForegroundColor Yellow
 }
-
-Write-Host ""
