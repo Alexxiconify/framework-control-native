@@ -19,7 +19,7 @@ Set-Location $scriptDir
 Write-Host "[1/2] Initializing build environment..." -ForegroundColor Yellow
 $vsDevCmdPath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"
 
-if (Test-Path $vsDevCmdPath) {
+if (Test-Path $vsDevCmdPath)
     $tempFile = [System.IO.Path]::GetTempFileName()
     cmd /c "`"$vsDevCmdPath`" -arch=amd64 -host_arch=amd64 && set > `"$tempFile`""
     Get-Content $tempFile | ForEach-Object {
@@ -28,32 +28,6 @@ if (Test-Path $vsDevCmdPath) {
         }
     }
     Remove-Item $tempFile
-    Write-Host "  Visual Studio environment loaded" -ForegroundColor Green
-}
-else {
-    Write-Host "  VS Build Tools not found, using system compiler" -ForegroundColor Yellow
-}
-
-Write-Host ""
-
-# Pre-build: Ensure framework_tool.exe is in bin_data for embedding
-$BinDataDir = "$scriptDir\service\src\bin_data"
-if (-not (Test-Path $BinDataDir)) {
-    New-Item -ItemType Directory -Path $BinDataDir -Force | Out-Null
-}
-# We assume framework_tool.exe is in output/ from previous steps or user provided
-# If it exists in output, refresh the one in bin_data
-if (Test-Path "$scriptDir\output\framework_tool.exe") {
-    Write-Host "Updating embedded framework_tool.exe..."
-    Copy-Item "$scriptDir\output\framework_tool.exe" -Destination "$BinDataDir\framework_tool.exe" -Force
-}
-
-# Build Rust application
-Write-Host "[2/2] Building application..." -ForegroundColor Yellow
-Set-Location "service"
-
-$buildStart = Get-Date
-
 if ($Release) {
     Write-Host "  Building in RELEASE mode..." -ForegroundColor Cyan
     cargo build --release

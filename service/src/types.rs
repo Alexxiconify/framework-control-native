@@ -83,16 +83,6 @@ fn default_rate_limit_pct_per_step() -> u32 {
     100
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct PartialConfig {
-    pub fan: Option<FanControlConfig>,
-    pub power: Option<PowerConfig>,
-    pub battery: Option<BatteryConfig>,
-    pub updates: Option<UpdatesConfig>,
-    pub telemetry: Option<TelemetryConfig>,
-    pub ui: Option<UiConfig>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdatesConfig {
     #[serde(default)]

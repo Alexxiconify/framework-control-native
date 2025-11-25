@@ -65,7 +65,6 @@ if (-not (Test-Path "target\release\framework-control.exe")) {
     }
 }
 $ExePath = "target\release\framework-control.exe"
-$ExeSize = [math]::Round((Get-Item $ExePath).Length / 1MB, 2)
 Write-Host "  [OK] Release build complete" -ForegroundColor Green
 Set-Location $ProjectRoot
 # Create WiX directory and files
@@ -77,7 +76,6 @@ if (-not (Test-Path $WixDir)) {
 # Generate new GUIDs
 $ProductGuid = [guid]::NewGuid().ToString()
 $MainExeGuid = [guid]::NewGuid().ToString()
-$ConfigDirGuid = [guid]::NewGuid().ToString()
 $ReadmeGuid = [guid]::NewGuid().ToString()
 $LicenseGuid = [guid]::NewGuid().ToString()
 $MenuDirGuid = [guid]::NewGuid().ToString()
