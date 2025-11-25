@@ -1,10 +1,10 @@
 use super::framework_tool_parser::{
     parse_power, parse_thermal, parse_versions, PowerBatteryInfo, ThermalParsed, VersionsParsed,
 };
-use crate::utils::{download as dl, github as gh, global_cache, wget as wg};
+use crate::utils::global_cache;
 use std::time::Duration;
 use tokio::process::Command;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 /// Simple function to find executable in PATH (Windows-specific)
 fn find_in_path(name: &str) -> Option<String> {
@@ -130,6 +130,10 @@ impl FrameworkTool {
         Ok(())
     }
 
+    pub async fn run_raw(&self, args: &[&str]) -> Result<String, String> {
+        self.run(args).await
+    }
+
     async fn run(&self, args: &[&str]) -> Result<String, String> {
         use tokio::time::{timeout, Duration};
         let child = Command::new(&self.path)
@@ -154,101 +158,40 @@ impl FrameworkTool {
     }
 }
 
+/// Embed the framework_tool binary
+const FRAMEWORK_TOOL_BYTES: &[u8] = include_bytes!("../bin_data/framework_tool.exe");
+
 async fn resolve_framework_tool() -> Result<String, String> {
-    // Prefer alongside the running service binary
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = if cfg!(windows) {
-                dir.join("framework_tool.exe")
-            } else {
-                dir.join("framework_tool")
-            };
-            if candidate.exists() {
-                if let Some(s) = candidate.to_str() {
-                    return Ok(s.to_string());
-                }
-            }
+    // 1. Determine path next to executable
+    let exe = std::env::current_exe().map_err(|e| format!("Failed to get current exe: {}", e))?;
+    let dir = exe.parent().ok_or("Failed to get parent directory")?;
+    let tool_path = dir.join("framework_tool.exe");
+
+    // 2. Check if it exists, if not (or if we want to enforce version), write it
+    // For now, we only write if missing to avoid overwriting if user has a custom version
+    if !tool_path.exists() {
+        info!("Extracting embedded framework_tool.exe...");
+        if let Err(e) = std::fs::write(&tool_path, FRAMEWORK_TOOL_BYTES) {
+            return Err(format!("Failed to extract framework_tool.exe: {}", e));
         }
     }
 
-    if let Some(p) = find_in_path("framework_tool") {
-        return Ok(p);
-    }
-    if let Some(p) = find_in_path("framework_tool.exe") {
-        return Ok(p);
-    }
-
-    Err("framework_tool not found. Please install via winget: winget install FrameworkComputer.framework_tool".into())
+    Ok(tool_path.to_string_lossy().to_string())
 }
 
-/// Resolve framework_tool, attempting installation if not present.
+/// Resolve framework_tool, extracting if needed.
 pub async fn resolve_or_install() -> Result<FrameworkTool, String> {
-    // 1) Try resolve immediately
-    if let Ok(cli) = FrameworkTool::new().await {
-        return Ok(cli);
-    }
-
-    // 2) Try winget install once
-    if let Err(err) = wg::try_winget_install_package("FrameworkComputer.framework_tool", None).await
-    {
-        warn!("winget automatic install failed: {}", err);
-    }
-
-    // 3) Try resolve again
-    if let Ok(cli) = FrameworkTool::new().await {
-        return Ok(cli);
-    }
-
-    // 4) Try direct download once
-    if let Err(err) = attempt_install_via_direct_download().await {
-        warn!("direct download fallback failed: {}", err);
-    }
-
-    // 5) Final resolve attempt (post direct-download)
+    // Try to resolve/extract
     match FrameworkTool::new().await {
         Ok(cli) => Ok(cli),
         Err(e) => {
-            error!(
-                "framework_tool not found or not runnable after attempted installs: {}",
-                e
-            );
+            error!("Failed to resolve framework_tool: {}", e);
             Err(e)
         }
     }
 }
 
-/// Fallback: cross-platform direct download of framework_tool from GitHub Releases
+/// Fallback: cross-platform direct download (Legacy/Unused now)
 pub async fn attempt_install_via_direct_download() -> Result<(), String> {
-    // Always download next to the service binary to avoid hardcoded system paths
-    let base_dir = match std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-    {
-        Some(p) => p,
-        None => return Err("could not resolve service directory for direct download".into()),
-    };
-    #[cfg(target_os = "windows")]
-    let ext: &str = ".exe";
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let ext: &str = "";
-    let filename = format!("framework_tool{}", ext);
-    let url = gh::get_latest_release_url_ending_with(
-        "FrameworkComputer",
-        "framework-system",
-        &[filename.as_str()],
-    )
-    .await
-    .map_err(|e| format!("failed to resolve framework_tool asset: {e}"))?
-    .ok_or_else(|| "framework_tool asset not found in latest release".to_string())?;
-    info!(
-        "Attempting direct download of framework_tool into '{}' from '{}'",
-        base_dir.to_string_lossy(),
-        url
-    );
-    let final_path = dl::download_to_path(&url, &base_dir.to_string_lossy().to_string()).await?;
-
-    if let Ok(meta) = std::fs::metadata(&final_path) {
-        info!("downloaded size: {} bytes", meta.len());
-    }
     Ok(())
 }

@@ -29,11 +29,24 @@ if (Test-Path $vsDevCmdPath) {
     }
     Remove-Item $tempFile
     Write-Host "  Visual Studio environment loaded" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  VS Build Tools not found, using system compiler" -ForegroundColor Yellow
 }
 
 Write-Host ""
+
+# Pre-build: Ensure framework_tool.exe is in bin_data for embedding
+$BinDataDir = "$scriptDir\service\src\bin_data"
+if (-not (Test-Path $BinDataDir)) {
+    New-Item -ItemType Directory -Path $BinDataDir -Force | Out-Null
+}
+# We assume framework_tool.exe is in output/ from previous steps or user provided
+# If it exists in output, refresh the one in bin_data
+if (Test-Path "$scriptDir\output\framework_tool.exe") {
+    Write-Host "Updating embedded framework_tool.exe..."
+    Copy-Item "$scriptDir\output\framework_tool.exe" -Destination "$BinDataDir\framework_tool.exe" -Force
+}
 
 # Build Rust application
 Write-Host "[2/2] Building application..." -ForegroundColor Yellow
@@ -45,7 +58,8 @@ if ($Release) {
     Write-Host "  Building in RELEASE mode..." -ForegroundColor Cyan
     cargo build --release
     $exePath = "target\release\framework-control.exe"
-} else {
+}
+else {
     Write-Host "  Building in DEBUG mode (faster)..." -ForegroundColor Cyan
     cargo build
     $exePath = "target\debug\framework-control.exe"
@@ -78,7 +92,8 @@ if (Test-Path $fullPath) {
 
     if ($Release) {
         Write-Host "Optimized release build ready!" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "Debug build ready (use -Release for optimized build)" -ForegroundColor Yellow
     }
     Write-Host ""
@@ -87,10 +102,26 @@ if (Test-Path $fullPath) {
         Write-Host "Starting application..." -ForegroundColor Yellow
         Write-Host ""
         & $fullPath
-    } else {
+    }
+    else {
         Write-Host "To run: .\service\$exePath" -ForegroundColor White
         Write-Host "Or use: .\build.ps1 -Run" -ForegroundColor White
     }
-} else {
+    
+    # Copy to output
+    $OutputDir = Join-Path $scriptDir "output"
+    if (-not (Test-Path $OutputDir)) {
+        New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+    }
+    
+    $DestName = "framework_fan_control.exe"
+    $DestPath = Join-Path $OutputDir $DestName
+    
+    Copy-Item $fullPath -Destination $DestPath -Force
+    Write-Host ""
+    Write-Host "Standalone EXE copied to:" -ForegroundColor Cyan
+    Write-Host "  $DestPath" -ForegroundColor White
+}
+else {
     Write-Host "WARNING: Executable not found at expected location" -ForegroundColor Yellow
 }

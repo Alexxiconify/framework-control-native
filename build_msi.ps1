@@ -88,7 +88,7 @@ $LicensePath = Resolve-Path "$ProjectRoot\LICENSE"
 $WixSource = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-    <Product Id="$ProductGuid" Name="Framework Control" Language="1033" Version="0.4.2.0" Manufacturer="Framework Control" UpgradeCode="PUT-GUID-HERE">
+    <Product Id="$ProductGuid" Name="Framework Control Native" Language="1033" Version="0.4.3.0" Manufacturer="Framework Control" UpgradeCode="PUT-GUID-HERE">
         <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
 
         <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
@@ -98,6 +98,9 @@ $WixSource = @"
             <ComponentGroupRef Id="ProductComponents" />
             <ComponentRef Id="ApplicationShortcut" />
         </Feature>
+        
+        <Property Id="MSIFASTINSTALL" Value="7" />
+        <Property Id="DISABLEROLLBACK" Value="1" />
     </Product>
 
     <Fragment>
@@ -158,7 +161,7 @@ Write-Host "  Linking to create .msi..." -ForegroundColor Yellow
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
-& light.exe "FrameworkControl.wixobj" -ext WixUtilExtension -ext WixUIExtension -out "$OutputDir\FrameworkControl-0.4.2.msi" -sval
+& light.exe "FrameworkControl.wixobj" -ext WixUtilExtension -ext WixUIExtension -out "$OutputDir\FrameworkControlNative-0.4.3.msi" -sval
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] WiX linking failed!" -ForegroundColor Red
     Set-Location $ProjectRoot
@@ -168,7 +171,7 @@ Write-Host "  [OK] MSI created successfully" -ForegroundColor Green
 Set-Location $ProjectRoot
 # Summary
 Write-Host "[5/5] Complete!" -ForegroundColor Cyan
-$MsiPath = Resolve-Path "$OutputDir\FrameworkControl-0.4.2.msi"
+$MsiPath = Resolve-Path "$OutputDir\FrameworkControlNative-0.4.3.msi"
 $MsiSize = [math]::Round((Get-Item $MsiPath).Length / 1MB, 2)
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
@@ -178,7 +181,7 @@ Write-Host ""
 Write-Host "Installer Details:" -ForegroundColor Cyan
 Write-Host "  Location: $MsiPath" -ForegroundColor White
 Write-Host "  Size: $MsiSize MB" -ForegroundColor White
-Write-Host "  Version: 0.4.2" -ForegroundColor White
+Write-Host "  Version: 0.4.3" -ForegroundColor White
 Write-Host ""
 Write-Host "Whats Included:" -ForegroundColor Cyan
 Write-Host "  [OK] Framework Control executable" -ForegroundColor White
@@ -187,7 +190,7 @@ Write-Host "  [OK] Start Menu shortcut" -ForegroundColor White
 Write-Host "  [OK] Fan curve service (always running)" -ForegroundColor White
 Write-Host ""
 Write-Host "To Install:" -ForegroundColor Yellow
-Write-Host "  1. Double-click: FrameworkControl-0.4.2.msi" -ForegroundColor White
+Write-Host "  1. Double-click: FrameworkControlNative-0.4.3.msi" -ForegroundColor White
 Write-Host "  2. Follow installation wizard" -ForegroundColor White
 Write-Host "  3. Service starts automatically" -ForegroundColor White
 Write-Host ""

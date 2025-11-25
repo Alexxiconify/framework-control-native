@@ -11,7 +11,9 @@ pub fn config_path() -> PathBuf {
     }
     // Prefer ProgramData for system-wide service config
     let base = std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".into());
-    PathBuf::from(base).join("FrameworkControl").join("config.json")
+    PathBuf::from(base)
+        .join("FrameworkControl")
+        .join("config.json")
 }
 
 pub fn load() -> Config {
@@ -28,7 +30,11 @@ pub fn load() -> Config {
                 return cfg;
             }
             Err(e) => {
-                tracing::warn!("Failed to parse config file {:?}: {}. Using defaults.", path, e);
+                tracing::warn!(
+                    "Failed to parse config file {:?}: {}. Using defaults.",
+                    path,
+                    e
+                );
             }
         }
     } else {
@@ -45,15 +51,20 @@ pub fn save(cfg: &Config) -> Result<(), String> {
 
     // Write to temporary file first for atomic operation
     let tmp_path = path.with_extension("json.tmp");
-    let s = serde_json::to_string_pretty(cfg).map_err(|e| format!("Failed to serialize config: {}", e))?;
+    let s = serde_json::to_string_pretty(cfg)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-    let mut f = File::create(&tmp_path).map_err(|e| format!("Failed to create temp config file: {}", e))?;
-    f.write_all(s.as_bytes()).map_err(|e| format!("Failed to write temp config file: {}", e))?;
-    f.sync_all().map_err(|e| format!("Failed to sync temp config file: {}", e))?;
+    let mut f =
+        File::create(&tmp_path).map_err(|e| format!("Failed to create temp config file: {}", e))?;
+    f.write_all(s.as_bytes())
+        .map_err(|e| format!("Failed to write temp config file: {}", e))?;
+    f.sync_all()
+        .map_err(|e| format!("Failed to sync temp config file: {}", e))?;
     drop(f);
 
     // Atomic rename
-    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to rename config file: {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Failed to rename config file: {}", e))?;
 
     tracing::info!("Config saved successfully to {:?}", path);
     Ok(())

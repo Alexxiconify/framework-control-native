@@ -16,16 +16,6 @@ async fn fetch_latest_release(owner: &str, name: &str) -> Result<Value, String> 
     serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())
 }
 
-fn extract_latest_version_tag(parsed: &Value) -> Option<String> {
-    let tag = parsed.get("tag_name").and_then(|v| v.as_str())?;
-    let v = tag.trim_start_matches('v').to_string();
-    if v.is_empty() {
-        None
-    } else {
-        Some(v)
-    }
-}
-
 fn find_asset_url_ending_with(parsed: &Value, preferred_suffixes: &[&str]) -> Option<String> {
     let assets = parsed.get("assets")?.as_array()?.clone();
     assets.iter().find_map(|a| {
@@ -42,14 +32,6 @@ fn find_asset_url_ending_with(parsed: &Value, preferred_suffixes: &[&str]) -> Op
             None
         }
     })
-}
-
-pub async fn get_latest_release_version_tag(
-    owner: &str,
-    name: &str,
-) -> Result<Option<String>, String> {
-    let parsed = fetch_latest_release(owner, name).await?;
-    Ok(extract_latest_version_tag(&parsed))
 }
 
 pub async fn get_latest_release_url_ending_with(

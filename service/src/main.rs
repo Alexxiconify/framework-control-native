@@ -365,6 +365,11 @@ struct FrameworkControlApp {
 
     // Status messages
     status_message: String,
+
+    // Advanced / BIOS features
+    custom_command: String,
+    command_output: String,
+    keyboard_backlight_pct: u32,
 }
 
 impl FrameworkControlApp {
@@ -445,6 +450,9 @@ impl FrameworkControlApp {
             charge_limit: 80,
             charge_limit_enabled: false,
             status_message: String::new(),
+            custom_command: String::new(),
+            command_output: String::new(),
+            keyboard_backlight_pct: 50,
         }
     }
 
@@ -496,39 +504,22 @@ impl eframe::App for FrameworkControlApp {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.add_space(10.0);
 
-                // System Status Section
-                ui.horizontal(|ui| {
-                    // Left column - Temperatures
-                    ui.vertical(|ui| {
-                        self.show_temperature_panel(ui);
-                        ui.add_space(10.0);
-                        self.show_power_panel(ui);
-                    });
-
-                    ui.add_space(20.0);
-
-                    // Right column - Fan speeds
-                    ui.vertical(|ui| {
-                        self.show_fans_panel(ui);
-                    });
-                });
+                // 1. Dashboard (Temps, Power, Fans)
+                self.show_dashboard(ui);
 
                 ui.add_space(20.0);
                 ui.separator();
                 ui.add_space(10.0);
 
-                // Control Section (full width)
-                ui.columns(2, |columns| {
-                    // Fan Control with Curve Editor
-                    columns[0].group(|ui| {
-                        self.show_fan_control_enhanced(ui);
-                    });
+                // 2. Control Center (Curves, Limits)
+                self.show_control_center(ui);
 
-                    // Power & Battery Control
-                    columns[1].group(|ui| {
-                        self.show_power_battery_control(ui);
-                    });
-                });
+                ui.add_space(20.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                // 3. Advanced / BIOS
+                self.show_advanced_panel(ui);
 
                 ui.add_space(20.0);
                 ui.separator();
@@ -541,95 +532,7 @@ impl eframe::App for FrameworkControlApp {
     }
 }
 
-// UI Panels
 impl FrameworkControlApp {
-    fn show_dashboard(&mut self, ui: &mut egui::Ui) {
-        ui.heading("System Overview");
-        ui.add_space(10.0);
-
-        // Thermal info
-        if let Some(thermal) = &self.thermal_data {
-            ui.group(|ui| {
-                ui.heading("🌡️ Temperatures");
-                ui.add_space(5.0);
-
-                egui::Grid::new("temps_grid")
-                    .num_columns(2)
-                    .spacing([40.0, 4.0])
-                    .show(ui, |ui| {
-                        for (name, temp) in &thermal.temps {
-                            ui.label(name);
-                            let color = if *temp > 80 {
-                                egui::Color32::RED
-                            } else if *temp > 70 {
-                                egui::Color32::YELLOW
-                            } else {
-                                egui::Color32::GREEN
-                            };
-                            ui.colored_label(color, format!("{}°C", temp));
-                            ui.end_row();
-                        }
-                    });
-            });
-        }
-
-        ui.add_space(10.0);
-
-        // Fan info
-        if let Some(thermal) = &self.thermal_data {
-            ui.group(|ui| {
-                ui.heading("🌀 Fans");
-                ui.add_space(5.0);
-
-                egui::Grid::new("fans_grid")
-                    .num_columns(2)
-                    .spacing([40.0, 4.0])
-                    .show(ui, |ui| {
-                        for (idx, rpm) in thermal.rpms.iter().enumerate() {
-                            ui.label(format!("Fan {}", idx + 1));
-                            ui.label(format!("{} RPM", rpm));
-                            ui.end_row();
-                        }
-                    });
-            });
-        }
-
-        ui.add_space(10.0);
-
-        // Power info
-        if let Some(power) = &self.power_data {
-            ui.group(|ui| {
-                ui.heading("🔋 Power");
-                ui.add_space(5.0);
-
-                egui::Grid::new("power_grid")
-                    .num_columns(2)
-                    .spacing([40.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label("Status");
-                        ui.label(if power.charging.unwrap_or(false) {
-                            "⚡ Charging"
-                        } else {
-                            "🔋 Battery"
-                        });
-                        ui.end_row();
-
-                        if let Some(pct) = power.percentage {
-                            ui.label("Battery");
-                            ui.label(format!("{}%", pct));
-                            ui.end_row();
-                        }
-
-                        if let Some(voltage) = power.present_voltage_mv {
-                            ui.label("Voltage");
-                            ui.label(format!("{:.2}V", voltage as f32 / 1000.0));
-                            ui.end_row();
-                        }
-                    });
-            });
-        }
-    }
-
     fn show_temperature_panel(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.heading("🌡️ Temperatures");
@@ -933,6 +836,113 @@ impl FrameworkControlApp {
             }
         });
         self.status_message = format!("✓ Power: {}W/{}°C", tdp, thermal);
+    }
+
+    fn show_dashboard(&mut self, ui: &mut egui::Ui) {
+        ui.heading("📊 Dashboard");
+        ui.add_space(5.0);
+
+        egui::Grid::new("dashboard_grid")
+            .num_columns(2)
+            .spacing([20.0, 20.0])
+            .show(ui, |ui| {
+                // Top Left: Temperatures
+                ui.vertical(|ui| {
+                    self.show_temperature_panel(ui);
+                });
+
+                // Top Right: Power Status
+                ui.vertical(|ui| {
+                    self.show_power_panel(ui);
+                });
+                ui.end_row();
+
+                // Bottom: Fans (spanning 2 columns if possible, or just left)
+                ui.vertical(|ui| {
+                    self.show_fans_panel(ui);
+                });
+                ui.end_row();
+            });
+    }
+
+    fn show_control_center(&mut self, ui: &mut egui::Ui) {
+        ui.heading("🎛️ Control Center");
+        ui.add_space(5.0);
+
+        ui.columns(2, |columns| {
+            columns[0].group(|ui| {
+                self.show_fan_control_enhanced(ui);
+            });
+            columns[1].group(|ui| {
+                self.show_power_battery_control(ui);
+            });
+        });
+    }
+
+    fn show_advanced_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("🛠️ Advanced / BIOS");
+        ui.add_space(5.0);
+
+        ui.group(|ui| {
+            ui.label("Experimental Features");
+            ui.separator();
+
+            // Keyboard Backlight (Placeholder)
+            ui.horizontal(|ui| {
+                ui.label("Keyboard Backlight:");
+                ui.add(egui::Slider::new(&mut self.keyboard_backlight_pct, 0..=100).suffix("%"));
+                if ui.button("Set").clicked() {
+                    // TODO: Implement actual call
+                    self.status_message = format!(
+                        "Backlight set to {}% (Simulated)",
+                        self.keyboard_backlight_pct
+                    );
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+
+            // Custom Command Runner
+            ui.label("Custom framework_tool Command:");
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.custom_command);
+                if ui.button("Run").clicked() {
+                    self.run_custom_command();
+                }
+            });
+
+            if !self.command_output.is_empty() {
+                ui.add_space(5.0);
+                ui.label("Output:");
+                egui::ScrollArea::vertical()
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        ui.monospace(&self.command_output);
+                    });
+            }
+        });
+    }
+
+    fn run_custom_command(&mut self) {
+        let cmd = self.custom_command.clone();
+        if cmd.trim().is_empty() {
+            return;
+        }
+
+        let state = self.state.clone();
+        self.command_output =
+            "Command sent (async). Output logging not yet linked to UI.".to_string();
+
+        self.runtime.spawn(async move {
+            let args: Vec<&str> = cmd.split_whitespace().collect();
+            if let Some(ft) = state.framework_tool.read().await.as_ref() {
+                match ft.run_raw(&args).await {
+                    Ok(o) => tracing::info!("Custom Command Output:\n{}", o),
+                    Err(e) => tracing::error!("Custom Command Error: {}", e),
+                }
+            }
+        });
     }
 
     fn apply_charge_limit(&mut self) {

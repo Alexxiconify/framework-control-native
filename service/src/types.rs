@@ -71,7 +71,7 @@ pub struct CurveConfig {
 }
 
 fn default_points() -> Vec<[u32; 2]> {
-    vec![[40, 0], [60, 40], [75, 80], [85, 100]]
+    vec![[50, 0], [60, 30], [70, 50], [80, 80], [90, 100]]
 }
 fn default_poll_ms() -> u64 {
     2000
@@ -82,34 +82,6 @@ fn default_hysteresis_c() -> u32 {
 fn default_rate_limit_pct_per_step() -> u32 {
     100
 }
-
-#[derive(Serialize)]
-pub struct UpdateCheck {
-    pub current_version: String,
-    pub latest_version: String,
-}
-
-#[derive(Serialize)]
-pub struct SystemInfo {
-    pub cpu: String,
-    pub memory_total_mb: u64,
-    pub os: String,
-    pub dgpu: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct Health {
-    pub cli_present: bool,
-    pub service_version: String,
-}
-
-#[derive(Serialize, Default)]
-pub struct ShortcutsStatus {
-    pub installed: bool,
-}
-
-#[derive(Serialize, Default)]
-pub struct Empty {}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PartialConfig {
@@ -174,13 +146,6 @@ pub struct FanCalibration {
     pub updated_at: i64,
 }
 
-// Generic API error envelope
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorEnvelope {
-    pub code: String,
-    pub message: String,
-}
-
 // Power config stored in Config and applied at boot (and on set)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SettingU32 {
@@ -232,38 +197,4 @@ pub struct BatteryConfig {
     /// Optional SoC threshold (%) for rate limiting
     #[serde(skip_serializing_if = "Option::is_none")]
     pub charge_rate_soc_threshold_pct: Option<u8>,
-}
-
-// API-facing union of battery info (flatten of parsed + limits)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct BatteryInfo {
-    #[serde(flatten)]
-    pub power_info: crate::cli::framework_tool_parser::PowerBatteryInfo,
-    #[serde(flatten)]
-    pub limits: crate::cli::framework_tool_parser::BatteryChargeLimitInfo,
-}
-
-// Combined power response used by /power
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PowerResponse {
-    /// Battery info (framework_tool --power) + charge limits (charge-limit CLI)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub battery: Option<BatteryInfo>,
-    /// RyzenAdj presence and parsed info
-    pub ryzenadj_installed: bool,
-    #[serde(flatten)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ryzenadj: Option<crate::cli::ryzen_adj_parser::RyzenAdjInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetChargeLimitRequest {
-    pub max_pct: u8,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetRateLimitRequest {
-    pub rate_c: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub battery_soc_threshold_pct: Option<u8>,
 }
