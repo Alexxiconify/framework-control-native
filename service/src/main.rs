@@ -14,15 +14,6 @@ mod utils;
 use types::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Check command line arguments
-    let args: Vec<String> = std::env::args().collect();
-
-    // If run with --service flag, run as Windows Service
-    if args.len() > 1 && args[1] == "--service" {
-        return windows_service::run_service().map_err(|e| format!("Service error: {}", e).into());
-    }
-
-    // Otherwise run GUI
     run_gui().map_err(|e| e.into())
 }
 
@@ -42,21 +33,9 @@ fn run_gui() -> Result<(), eframe::Error> {
         }
     }
 
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
-        .without_time()
-        .init();
-
     // Create app state
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let state = runtime.block_on(async { AppState::initialize().await });
-
-    // Start background tasks
-    let state_clone = state.clone();
-    runtime.spawn(async move {
-        tasks::boot(&state_clone).await;
-    });
 
     // Start background data poller (Performance Fix)
     let state_clone_poll = state.clone();
