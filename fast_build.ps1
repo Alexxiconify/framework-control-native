@@ -5,7 +5,7 @@ param([switch]$Release, [switch]$Run)
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host "Framework Control - Fast Build" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
