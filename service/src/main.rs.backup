@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use eframe::egui;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -7,6 +9,7 @@ mod config;
 mod ec;
 mod types;
 
+// Re-export for convenience
 use types::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,7 +36,30 @@ fn run_gui() -> Result<(), eframe::Error> {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let state = runtime.block_on(async { AppState::initialize().await });
 
-    // Launch GUI directly - no background polling, data fetched on-demand
+    // Start background data poller (Performance Fix)
+    let state_clone_poll = state.clone();
+    runtime.spawn(async move {
+        loop {
+            if let Some(ft) = state_clone_poll.framework_tool.read().await.as_ref() {
+                let mut cache = state_clone_poll.cache.write().await;
+
+                if let Ok(thermal) = ft.read_thermal().await {
+                    cache.thermal = Some(thermal);
+                }
+                if let Ok(power) = ft.read_power_info().await {
+                    cache.power = Some(power);
+                }
+                if cache.versions.is_none() {
+                    if let Ok(v) = ft.read_versions().await {
+                        cache.versions = Some(v);
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
+    });
+
+    // Launch GUI
     let args: Vec<String> = std::env::args().collect();
     let start_minimized = args.iter().any(|a| a == "--minimized");
 
@@ -41,6 +67,7 @@ fn run_gui() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
             .with_min_inner_size([800.0, 600.0])
+            .with_icon(load_icon())
             .with_visible(!start_minimized),
         ..Default::default()
     };
@@ -52,28 +79,77 @@ fn run_gui() -> Result<(), eframe::Error> {
     )
 }
 
+fn load_icon() -> egui::IconData {
+    // 32x32 Framework Gear Icon
+    let width = 32;
+    let height = 32;
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
+
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+    let radius = 14.0;
+
+    // Framework Orange
+    let orange = [255, 106, 0, 255];
+    // Dark Grey for the "F"
+    let dark = [30, 30, 30, 255];
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = ((y * width + x) * 4) as usize;
+            let dx = x as f32 - center_x;
+            let dy = y as f32 - center_y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let angle = dy.atan2(dx);
+
+            // Gear teeth (12 teeth)
+            let teeth = (angle * 12.0).cos();
+            let gear_radius = radius + teeth * 1.5;
+
+            if dist <= gear_radius {
+                // Main gear body
+                rgba[idx..idx + 4].copy_from_slice(&orange);
+
+                // "F" cutout (simplified)
+                if x >= 12 && x <= 16 && y >= 8 && y <= 24 {
+                    rgba[idx..idx + 4].copy_from_slice(&dark);
+                } // Vertical
+                if x >= 16 && x <= 22 && y >= 8 && y <= 12 {
+                    rgba[idx..idx + 4].copy_from_slice(&dark);
+                } // Top bar
+                if x >= 16 && x <= 20 && y >= 16 && y <= 19 {
+                    rgba[idx..idx + 4].copy_from_slice(&dark);
+                } // Mid bar
+            }
+
+            // Antialiasing/Transparency for outside
+            if dist > gear_radius {
+                rgba[idx + 3] = 0;
+            }
+        }
+    }
+
+    egui::IconData {
+        rgba,
+        width,
+        height,
+    }
+}
+
 // Application state
 #[derive(Clone)]
 pub struct AppState {
     pub framework_tool: Arc<RwLock<Option<cli::FrameworkTool>>>,
     pub config: Arc<RwLock<Config>>,
+    pub telemetry_samples: Arc<RwLock<std::collections::VecDeque<TelemetrySample>>>,
     pub cache: Arc<RwLock<CachedData>>,
-    pub ec_status: Arc<RwLock<EcStatus>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum EcStatus {
-    Unknown,
-    Connected,
-    AccessDenied,
-    DriverMissing,
 }
 
 #[derive(Default, Clone)]
 pub struct CachedData {
-    pub thermal: Option<cli::ThermalParsed>,
-    pub power: Option<cli::PowerBatteryInfo>,
-    pub versions: Option<cli::Versions>,
+    pub thermal: Option<cli::::ThermalParsed>,
+    pub power: Option<cli::framework_tool::PowerBatteryInfo>,
+    pub versions: Option<cli::framework_tool::Versions>,
 }
 
 impl AppState {
@@ -81,107 +157,42 @@ impl AppState {
         let config = Arc::new(RwLock::new(config::load()));
 
         let framework_tool = Arc::new(RwLock::new(Some(cli::FrameworkTool::new().await)));
-        let ec_status = Arc::new(RwLock::new(EcStatus::Unknown));
-
-        Self::spawn_framework_tool_resolver(framework_tool.clone(), ec_status.clone());
+        Self::spawn_framework_tool_resolver(framework_tool.clone());
 
         let cache = Arc::new(RwLock::new(CachedData::default()));
 
         Self {
             framework_tool,
             config,
+            telemetry_samples: Arc::new(RwLock::new(Default::default())),
             cache,
-            ec_status,
         }
     }
 
-    fn spawn_framework_tool_resolver(
-        ft_lock: Arc<RwLock<Option<cli::FrameworkTool>>>,
-        ec_status: Arc<RwLock<EcStatus>>,
-    ) {
+    fn spawn_framework_tool_resolver(ft_lock: Arc<RwLock<Option<cli::FrameworkTool>>>) {
         tokio::spawn(async move {
             use tokio::time::{sleep, Duration};
+            let mut _consecutive_errors = 0u32;
             loop {
-                // Check EC status
-                let status = match ec::check_connection() {
-                    Ok(_) => EcStatus::Connected,
-                    Err(ec::EcError::AccessDenied) => EcStatus::AccessDenied,
-                    Err(ec::EcError::DriverMissing) => EcStatus::DriverMissing,
-                    Err(_) => EcStatus::DriverMissing,
-                };
-
-                *ec_status.write().await = status.clone();
-
-                if status == EcStatus::Connected {
-                    let current = { ft_lock.read().await.clone() };
-                    match current {
-                        Some(cli) => {
-                            if let Err(e) = cli.read_versions().await {
-                                *ft_lock.write().await = None;
-                                tracing::warn!("framework_tool unavailable ({})", e);
-                            }
-                        }
-                        None => {
-                            let cli = cli::FrameworkTool::new().await;
-                            *ft_lock.write().await = Some(cli);
-                            tracing::info!("framework_tool is now available");
+                let current = { ft_lock.read().await.clone() };
+                match current {
+                    Some(cli) => {
+                        if let Err(e) = cli.read_versions().await {
+                            *ft_lock.write().await = None;
+                            tracing::warn!("framework_tool unavailable ({})", e);
+                            _consecutive_errors = 0;
                         }
                     }
-                } else {
-                    // If not connected, ensure tool is None so we don't try to use it
-                    *ft_lock.write().await = None;
+                    None => {
+                        let cli = cli::FrameworkTool::new().await;
+                        *ft_lock.write().await = Some(cli);
+                        tracing::info!("framework_tool is now available");
+                        _consecutive_errors = 0;
+                    }
                 }
-
-                sleep(Duration::from_secs(2)).await;
+                sleep(Duration::from_secs(5)).await;
             }
         });
-    }
-
-    // Update EC command handling to ensure proper fan control
-    pub async fn update_fan_curve(&self) {
-        if let Some(ft) = self.framework_tool.read().await.as_ref() {
-            if let Ok(thermal) = ft.read_thermal().await {
-                let max_temp = thermal
-                    .sensors
-                    .iter()
-                    .map(|s| s.temp_c)
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let target_duty = {
-                    let config = self.config.read().await;
-                    let curve = config.fan.curve.clone().unwrap_or_else(|| CurveConfig {
-                        points: vec![[40, 20], [50, 30], [60, 40], [70, 60], [80, 80], [90, 100]],
-                        ..Default::default()
-                    });
-                    self.calculate_fan_duty(max_temp, &curve)
-                };
-                let _ = ft.set_fan_duty(target_duty as u32, None).await;
-            }
-        }
-    }
-
-    fn calculate_fan_duty(&self, temp: f32, curve: &CurveConfig) -> f32 {
-        let mut sorted_points = curve.points.clone();
-        sorted_points.sort_by(|a, b| a[0].cmp(&b[0]));
-
-        for i in 0..sorted_points.len() {
-            let p1 = sorted_points[i];
-            if i == 0 && temp <= p1[0] as f32 {
-                return p1[1] as f32;
-            }
-            if i == sorted_points.len() - 1 {
-                return p1[1] as f32;
-            }
-            let p2 = sorted_points[i + 1];
-            if temp >= p1[0] as f32 && temp <= p2[0] as f32 {
-                let t1 = p1[0] as f32;
-                let t2 = p2[0] as f32;
-                let d1 = p1[1] as f32;
-                let d2 = p2[1] as f32;
-                let ratio = (temp - t1) / (t2 - t1);
-                return d1 + (d2 - d1) * ratio;
-            }
-        }
-        50.0 // Default duty
     }
 }
 
@@ -192,17 +203,19 @@ mod tasks {
     pub async fn boot(state: &AppState) {
         // Fan curve task
         {
+            let ft_clone = state.framework_tool.clone();
             let cfg_clone = state.config.clone();
             tokio::spawn(async move {
-                fan_curve::run(cfg_clone).await;
+                fan_curve::run(ft_clone, cfg_clone).await;
             });
         }
 
         // Power settings task
         {
             let cfg_clone = state.config.clone();
+            let ft_clone = state.framework_tool.clone();
             tokio::spawn(async move {
-                power::run(cfg_clone).await;
+                power::run(cfg_clone, ft_clone).await;
             });
         }
 
@@ -214,12 +227,21 @@ mod tasks {
                 battery::run(ft_clone, cfg_clone).await;
             });
         }
+
+        // Telemetry task
+        {
+            let ft_clone = state.framework_tool.clone();
+            let cfg_clone = state.config.clone();
+            let samples_clone = state.telemetry_samples.clone();
+            tokio::spawn(async move {
+                telemetry::run(ft_clone, cfg_clone, samples_clone).await;
+            });
+        }
     }
 
     mod fan_curve {
         use super::*;
-        pub async fn run(cfg: Arc<RwLock<Config>>) {
-            println!("🚀 Fan control background service started");
+        pub async fn run(ft: Arc<RwLock<Option<cli::FrameworkTool>>>, cfg: Arc<RwLock<Config>>) {
             loop {
                 let (mode, curve, manual_duty) = {
                     let c = cfg.read().await;
@@ -236,66 +258,58 @@ mod tasks {
                     (mode, curve, manual.duty_pct)
                 };
 
-                // println!("📊 Fan mode: {:?}", mode);
-
                 match mode {
                     FanControlMode::Curve => {
-                        if let Ok(thermal) = cli::FrameworkTool::new().await.read_thermal().await {
-                            let max_temp = thermal
-                                .sensors
-                                .iter()
-                                .map(|s| s.temp_c)
-                                .fold(f32::NEG_INFINITY, f32::max);
+                        if let Some(tool) = ft.read().await.as_ref() {
+                            if let Ok(thermal) = tool.read_thermal().await {
+                                let max_temp = thermal
+                                    .sensors
+                                    .iter()
+                                    .map(|s| s.temp_c)
+                                    .fold(f32::NEG_INFINITY, f32::max);
 
-                            // Interpolate
-                            let mut target_duty = 50.0;
-                            let points = curve.points;
-                            // Sort points just in case
-                            let mut sorted_points = points.clone();
-                            sorted_points.sort_by(|a, b| a[0].cmp(&b[0]));
+                                // Interpolate
+                                let mut target_duty = 50.0;
+                                let points = curve.points;
+                                // Sort points just in case
+                                let mut sorted_points = points.clone();
+                                sorted_points.sort_by(|a, b| a[0].cmp(&b[0]));
 
-                            for i in 0..sorted_points.len() {
-                                let p1 = sorted_points[i];
-                                if i == 0 && max_temp <= p1[0] as f32 {
-                                    target_duty = p1[1] as f32;
-                                    break;
+                                for i in 0..sorted_points.len() {
+                                    let p1 = sorted_points[i];
+                                    if i == 0 && max_temp <= p1[0] as f32 {
+                                        target_duty = p1[1] as f32;
+                                        break;
+                                    }
+                                    if i == sorted_points.len() - 1 {
+                                        target_duty = p1[1] as f32;
+                                        break;
+                                    }
+                                    let p2 = sorted_points[i + 1];
+                                    if max_temp >= p1[0] as f32 && max_temp <= p2[0] as f32 {
+                                        let t1 = p1[0] as f32;
+                                        let t2 = p2[0] as f32;
+                                        let d1 = p1[1] as f32;
+                                        let d2 = p2[1] as f32;
+                                        let ratio = (max_temp - t1) / (t2 - t1);
+                                        target_duty = d1 + (d2 - d1) * ratio;
+                                        break;
+                                    }
                                 }
-                                if i == sorted_points.len() - 1 {
-                                    target_duty = p1[1] as f32;
-                                    break;
-                                }
-                                let p2 = sorted_points[i + 1];
-                                if max_temp >= p1[0] as f32 && max_temp <= p2[0] as f32 {
-                                    let t1 = p1[0] as f32;
-                                    let t2 = p2[0] as f32;
-                                    let d1 = p1[1] as f32;
-                                    let d2 = p2[1] as f32;
-                                    let ratio = (max_temp - t1) / (t2 - t1);
-                                    target_duty = d1 + (d2 - d1) * ratio;
-                                    break;
-                                }
+                                let _ = tool.set_fan_duty(target_duty as u32, None).await;
                             }
-                            // println!("🌡️ Max temp: {:.1}°C → Fan: {}%", max_temp, target_duty as u32);
-                            let _ = cli::FrameworkTool::new()
-                                .await
-                                .set_fan_duty(target_duty as u32, None)
-                                .await;
                         }
                     }
                     FanControlMode::Manual => {
-                        // println!("🎛️ Manual mode: {}%", manual_duty);
-                        let _ = cli::FrameworkTool::new()
-                            .await
-                            .set_fan_duty(manual_duty, None)
-                            .await;
+                        if let Some(tool) = ft.read().await.as_ref() {
+                            let _ = tool.set_fan_duty(manual_duty, None).await;
+                        }
                     }
                     FanControlMode::Disabled => {
                         // Auto mode
-                        // println!("🔄 Auto mode active");
-                        let _ = cli::FrameworkTool::new()
-                            .await
-                            .set_fan_control_auto(None)
-                            .await;
+                        if let Some(tool) = ft.read().await.as_ref() {
+                            let _ = tool.set_fan_control_auto(None).await;
+                        }
                     }
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
@@ -305,9 +319,10 @@ mod tasks {
 
     mod power {
         use super::*;
-        pub async fn run(cfg: Arc<RwLock<Config>>) {
+        pub async fn run(cfg: Arc<RwLock<Config>>, ft: Arc<RwLock<Option<cli::FrameworkTool>>>) {
             let _ = cfg;
             loop {
+
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
@@ -333,6 +348,42 @@ mod tasks {
             }
         }
     }
+
+    mod telemetry {
+        use super::*;
+        pub async fn run(
+            ft: Arc<RwLock<Option<cli::FrameworkTool>>>,
+            cfg: Arc<RwLock<Config>>,
+            samples: Arc<RwLock<std::collections::VecDeque<TelemetrySample>>>,
+        ) {
+            loop {
+                let poll_ms = { cfg.read().await.telemetry.poll_ms };
+
+                if let Some(tool) = ft.read().await.as_ref() {
+                    if let Ok(thermal) = tool.read_thermal().await {
+                        let mut temps = std::collections::BTreeMap::new();
+                        for s in thermal.sensors {
+                            temps.insert(s.name, s.temp_c as i32);
+                        }
+                        let rpms = thermal.fans.iter().map(|&f| f as u32).collect();
+
+                        let sample = TelemetrySample {
+                            ts_ms: chrono::Utc::now().timestamp_millis(),
+                            temps,
+                            rpms,
+                        };
+
+                        let mut s = samples.write().await;
+                        s.push_back(sample);
+                        if s.len() > 1800 {
+                            s.pop_front();
+                        }
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(poll_ms)).await;
+            }
+        }
+    }
 }
 
 struct FrameworkControlApp {
@@ -342,12 +393,9 @@ struct FrameworkControlApp {
     start_on_boot: bool,
 
     // Cached data
-    thermal_data: Option<cli::ThermalParsed>,
-    power_data: Option<cli::PowerBatteryInfo>,
-    versions: Option<cli::Versions>,
-
-    // Status
-    ec_status: EcStatus,
+    thermal_data: Option<cli::framework_tool::ThermalParsed>,
+    power_data: Option<cli::framework_tool::PowerBatteryInfo>,
+    versions: Option<cli::framework_tool::Versions>,
 
     // Fan control settings
     fan_duty: u32,
@@ -418,16 +466,15 @@ impl FrameworkControlApp {
         // Hyperlinks
         style.visuals.hyperlink_color = framework_orange;
 
+        // Window rounding
+        style.visuals.window_rounding = 8.0.into();
+        style.visuals.menu_rounding = 6.0.into();
+
         // Spacing
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
         style.spacing.button_padding = egui::vec2(10.0, 6.0);
 
         cc.egui_ctx.set_style(style);
-
-        // Start background tasks for fan control
-        runtime.block_on(async {
-            tasks::boot(&state).await;
-        });
 
         // Check startup status
         let start_on_boot = check_start_on_boot();
@@ -439,7 +486,6 @@ impl FrameworkControlApp {
             thermal_data: None,
             power_data: None,
             versions: None,
-            ec_status: EcStatus::Unknown,
             fan_duty: 50,
             fan_enabled: false,
             auto_fan: true,
@@ -465,13 +511,8 @@ impl FrameworkControlApp {
     }
 
     fn update_data(&mut self, ctx: &egui::Context) {
-        // Fetch data on-demand (once per second max)
-        let state = self.state.clone();
-        let runtime = &self.runtime;
-
-        // Non-blocking data fetch
+        // Non-blocking update from cache
         if let Ok(cache) = self.state.cache.try_read() {
-            // Use cached data if available
             if let Some(thermal) = &cache.thermal {
                 self.thermal_data = Some(thermal.clone());
             }
@@ -482,39 +523,7 @@ impl FrameworkControlApp {
                 self.versions = Some(versions.clone());
             }
         }
-
-        // Update EC status
-        if let Ok(status) = self.state.ec_status.try_read() {
-            self.ec_status = status.clone();
-        }
-
-        // Spawn task to update cache if stale (non-blocking)
-        runtime.spawn(async move {
-            if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                let mut cache = state.cache.write().await;
-
-                // Fetch thermal data
-                if let Ok(thermal) = ft.read_thermal().await {
-                    cache.thermal = Some(thermal);
-                }
-
-                // Fetch power data (less frequently)
-                if cache.power.is_none() {
-                    if let Ok(power) = ft.read_power_info().await {
-                        cache.power = Some(power);
-                    }
-                }
-
-                // Fetch versions once
-                if cache.versions.is_none() {
-                    if let Ok(versions) = ft.read_versions().await {
-                        cache.versions = Some(versions);
-                    }
-                }
-            }
-        });
-
-        ctx.request_repaint_after(std::time::Duration::from_millis(1000));
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
     }
 }
 
@@ -540,32 +549,6 @@ impl eframe::App for FrameworkControlApp {
             if !self.status_message.is_empty() {
                 ui.separator();
                 ui.colored_label(egui::Color32::from_rgb(255, 165, 0), &self.status_message);
-            }
-
-            // Warning banner for EC issues
-            match self.ec_status {
-                EcStatus::AccessDenied => {
-                    ui.separator();
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(
-                                egui::Color32::RED,
-                                "🔒 Access Denied: Administrator privileges required.",
-                            );
-                            if ui.button("🛡️ Restart as Administrator").clicked() {
-                                ec::restart_as_admin();
-                            }
-                        });
-                    });
-                }
-                EcStatus::DriverMissing => {
-                    ui.separator();
-                    ui.colored_label(
-                        egui::Color32::RED,
-                        "❌ EC Driver Missing: Please install the Framework Laptop Driver Bundle.",
-                    );
-                }
-                _ => {}
             }
         });
 
@@ -707,7 +690,6 @@ impl FrameworkControlApp {
             {
                 self.auto_fan = true;
                 self.fan_curve_enabled = false;
-                self.reset_fan_to_auto(); // Apply immediately
             }
             if ui
                 .radio(!self.auto_fan && !self.fan_curve_enabled, "Manual")
@@ -715,7 +697,6 @@ impl FrameworkControlApp {
             {
                 self.auto_fan = false;
                 self.fan_curve_enabled = false;
-                self.apply_fan_speed(); // Apply current manual speed
             }
             if ui
                 .radio(!self.auto_fan && self.fan_curve_enabled, "Curve")
@@ -723,7 +704,6 @@ impl FrameworkControlApp {
             {
                 self.auto_fan = false;
                 self.fan_curve_enabled = true;
-                self.apply_fan_curve(); // Apply curve immediately
             }
         });
 
@@ -734,12 +714,7 @@ impl FrameworkControlApp {
         } else if !self.fan_curve_enabled {
             ui.horizontal(|ui| {
                 ui.label("Speed:");
-                let changed = ui
-                    .add(egui::Slider::new(&mut self.fan_duty, 0..=100).suffix("%"))
-                    .changed();
-                if changed {
-                    self.apply_fan_speed(); // Apply immediately when slider moves
-                }
+                ui.add(egui::Slider::new(&mut self.fan_duty, 0..=100).suffix("%"));
             });
             if ui.button("⚡ Apply").clicked() {
                 self.apply_fan_speed();
@@ -828,27 +803,28 @@ impl FrameworkControlApp {
     fn apply_fan_speed(&mut self) {
         let duty = self.fan_duty;
         let state = self.state.clone();
-
         self.runtime.spawn(async move {
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                let _ = ft.set_fan_duty(duty, None).await;
+                match ft.set_fan_duty(duty, None).await {
+                    Ok(_) => tracing::info!("✓ Fan duty set to {}%", duty),
+                    Err(e) => tracing::error!("Failed to set fan: {}", e),
+                }
             }
         });
-
         self.fan_enabled = true;
         self.status_message = format!("✓ Fan: {}%", duty);
     }
 
     fn reset_fan_to_auto(&mut self) {
         let state = self.state.clone();
-
-        // Apply via framework_tool in hidden CMD
         self.runtime.spawn(async move {
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                let _ = ft.set_fan_control_auto(None).await;
+                match ft.set_fan_control_auto(None).await {
+                    Ok(_) => tracing::info!("✓ Fan reset to auto"),
+                    Err(e) => tracing::error!("Failed to reset fan: {}", e),
+                }
             }
         });
-
         self.fan_enabled = false;
         self.auto_fan = true;
         self.status_message = "✓ Fan: Auto".to_string();
@@ -860,7 +836,6 @@ impl FrameworkControlApp {
         let curve = self.fan_curve.clone();
         let state = self.state.clone();
 
-        // Spawn background task that continuously applies the curve
         self.runtime.spawn(async move {
             loop {
                 if let Some(ft) = state.framework_tool.read().await.as_ref() {
@@ -871,7 +846,6 @@ impl FrameworkControlApp {
                             .map(|s| s.temp_c)
                             .fold(f32::NEG_INFINITY, f32::max);
 
-                        // Calculate duty from curve
                         let mut duty = 50.0;
                         for i in 0..curve.len() {
                             if i == 0 && max_temp <= curve[i].0 {
@@ -896,11 +870,11 @@ impl FrameworkControlApp {
                             }
                         }
 
-                        // Apply via framework_tool (which uses hidden CMD)
                         let _ = ft.set_fan_duty(duty as u32, None).await;
+                        tracing::debug!("Fan curve: {}°C -> {}%", max_temp, duty as u32);
                     }
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         });
 
@@ -911,12 +885,14 @@ impl FrameworkControlApp {
         let (tdp, thermal, state) = (self.tdp_watts, self.thermal_limit, self.state.clone());
         self.runtime.spawn(async move {
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                if let Err(e) = ft.set_tdp_watts(tdp).await {
-                    eprintln!("Failed to set TDP watts: {}", e);
-                }
-                if let Err(e) = ft.set_thermal_limit_c(thermal).await {
-                    eprintln!("Failed to set thermal limit: {}", e);
-                }
+                // TODO: Implement power settings via framework_tool
+                // let _ = ft.set_tdp_watts(tdp).await;
+                // let _ = ft.set_thermal_limit_c(thermal).await;
+                tracing::info!(
+                    "✓ Power settings requested: {}W, {}°C (not yet implemented)",
+                    tdp,
+                    thermal
+                );
             }
         });
         self.status_message = format!("✓ Power: {}W/{}°C", tdp, thermal);
@@ -1032,15 +1008,23 @@ impl FrameworkControlApp {
     fn apply_charge_limit(&mut self) {
         let limit = self.charge_limit;
         let state = self.state.clone();
-
-        // Apply to hardware
         self.runtime.spawn(async move {
             if let Some(ft) = state.framework_tool.read().await.as_ref() {
-                let _ = ft.charge_limit_set(limit).await;
+                match ft.charge_limit_set(limit).await {
+                    Ok(_) => tracing::info!("✓ Charge limit set to {}%", limit),
+                    Err(e) => tracing::error!("Failed to set charge limit: {}", e),
+                }
             }
         });
-
         self.status_message = format!("✓ Charge Limit: {}%", limit);
+
+        // Save config
+        let mut cfg = self.state.config.blocking_write();
+        cfg.battery.charge_limit_max_pct = Some(SettingU8 {
+            enabled: true,
+            value: limit,
+        });
+        config::save(&cfg);
     }
 
     fn show_system(&mut self, ui: &mut egui::Ui) {
@@ -1066,14 +1050,10 @@ impl FrameworkControlApp {
                 .changed()
             {
                 set_start_on_boot(self.start_on_boot);
-                // Save config
-                let state = self.state.clone();
-                let start_on_boot = self.start_on_boot;
-                self.runtime.spawn(async move {
-                    let mut cfg = state.config.write().await;
-                    cfg.start_on_boot = start_on_boot;
-                    config::save(&*cfg);
-                });
+                // Save config (optional, but good for consistency)
+                let mut cfg = self.state.config.blocking_write();
+                cfg.start_on_boot = self.start_on_boot;
+                config::save(&cfg);
             }
         });
     }

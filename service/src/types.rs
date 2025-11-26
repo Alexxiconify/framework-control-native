@@ -10,8 +10,6 @@ pub struct Config {
     #[serde(default)]
     pub battery: BatteryConfig,
     #[serde(default)]
-    pub telemetry: TelemetryConfig,
-    #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
     pub start_on_boot: bool,
@@ -23,7 +21,6 @@ impl Default for Config {
             fan: FanControlConfig::default(),
             power: PowerConfig::default(),
             battery: BatteryConfig::default(),
-            telemetry: TelemetryConfig::default(),
             ui: UiConfig::default(),
             start_on_boot: false,
         }
@@ -104,52 +101,18 @@ pub struct UiConfig {
     pub theme: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelemetryConfig {
-    #[serde(default = "default_telemetry_poll_ms")]
-    pub poll_ms: u64,
-    #[serde(default = "default_telemetry_retain_seconds")]
-    pub retain_seconds: u64,
-}
-
-impl Default for TelemetryConfig {
-    fn default() -> Self {
-        Self {
-            poll_ms: default_telemetry_poll_ms(),
-            retain_seconds: default_telemetry_retain_seconds(),
-        }
-    }
-}
-
-fn default_telemetry_poll_ms() -> u64 {
-    1000
-}
-fn default_telemetry_retain_seconds() -> u64 {
-    1800
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelemetrySample {
-    pub ts_ms: i64,
-    pub temps: std::collections::BTreeMap<String, i32>,
-    pub rpms: Vec<u32>,
-}
 
 // Fan calibration types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FanCalibration {
-    /// Calibration data points: [duty_pct, rpm]
     pub points: Vec<[u32; 2]>,
-    /// Unix timestamp (seconds)
     pub updated_at: i64,
 }
 
 // Power config stored in Config and applied at boot (and on set)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SettingU32 {
-    /// Whether this setting should be applied
     pub enabled: bool,
-    /// The last chosen value (kept even when disabled)
     pub value: u32,
 }
 

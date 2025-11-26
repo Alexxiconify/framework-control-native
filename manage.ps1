@@ -33,25 +33,25 @@ if ($Action -eq "build" -or $Action -eq "run") {
     Write-Host "Building Rust application..." -ForegroundColor Cyan
     $cargoArgs = @("build")
     if ($Release) { $cargoArgs += "--release" }
-    
+
     cargo @cargoArgs
     if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
-    
+
     $target = if ($Release) { "release" } else { "debug" }
     $exe = "target\$target\framework-control.exe"
-    
+
     if (Test-Path $exe) {
-        Copy-Item $exe -Destination "$OutputDir\framework_fan_control.exe" -Force
-        Write-Host "Build success! Output: $OutputDir\framework_fan_control.exe" -ForegroundColor Green
+        Copy-Item $exe -Destination "$OutputDir\framework-control.exe" -Force
+        Write-Host "Build success! Output: $OutputDir\framework-control.exe" -ForegroundColor Green
     } else {
         Write-Error "Executable not found at $exe"
         exit 1
     }
     Pop-Location
-    
-    if ($Run) { 
+
+    if ($Run) {
         Write-Host "Starting application..." -ForegroundColor Cyan
-        & "$OutputDir\framework_fan_control.exe" 
+        & "$OutputDir\framework-control.exe"
     }
 }
 elseif ($Action -eq "msi") {
@@ -60,10 +60,10 @@ elseif ($Action -eq "msi") {
     Write-Host "Building Release binary for MSI..." -ForegroundColor Cyan
     cargo build --release
     if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
-    
+
     $WixDir = Join-Path $ServiceDir "wix"
     if (-not (Test-Path $WixDir)) { New-Item -ItemType Directory -Path $WixDir -Force | Out-Null }
-    
+
     # WiX Toolset lookup (simplified)
     $wixPath = $null
     $possiblePaths = @(
@@ -71,15 +71,15 @@ elseif ($Action -eq "msi") {
         "$env:WIX\bin"
     )
     foreach ($p in $possiblePaths) { if (Test-Path "$p\candle.exe") { $wixPath = $p; break } }
-    
+
     if (-not $wixPath) { Write-Error "WiX Toolset not found. Please install it."; exit 1 }
     $env:PATH = "$wixPath;$env:PATH"
-    
+
     # Generate WXS (simplified from build_msi.ps1)
     $ProductGuid = [guid]::NewGuid().ToString()
     $MainExeGuid = [guid]::NewGuid().ToString()
     $ServiceExePath = Resolve-Path "target\release\framework-control.exe"
-    
+
     $WixSource = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
@@ -123,11 +123,11 @@ elseif ($Action -eq "msi") {
 </Wix>
 "@
     $WixSource | Out-File "$WixDir\FrameworkControl.wxs" -Encoding UTF8
-    
+
     Set-Location $WixDir
     & candle.exe "FrameworkControl.wxs" -ext WixUtilExtension
     & light.exe "FrameworkControl.wixobj" -ext WixUtilExtension -ext WixUIExtension -out "$OutputDir\FrameworkControlNative-0.4.3.msi" -sval
-    
+
     Write-Host "MSI Created: $OutputDir\FrameworkControlNative-0.4.3.msi" -ForegroundColor Green
     Pop-Location
 }

@@ -70,9 +70,6 @@ config.json
 *.tar
 
 # Backup files
-*~
 *.orig
 *.rej
 *.io
-*.tmp
-.DS_Store

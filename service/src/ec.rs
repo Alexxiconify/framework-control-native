@@ -1,7 +1,80 @@
-use windows::core::w;
+use std::sync::OnceLock;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Storage::FileSystem::*;
 use windows::Win32::System::IO::*;
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
+
+// Flag to avoid repeated "opened" logs
+static EC_OPEN_LOGGED: OnceLock<bool> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+pub enum EcError {
+    AccessDenied,
+    DriverMissing,
+    IoError(String),
+}
+
+// Open EC device fresh each time - no caching to avoid permission and thread-safety issues
+fn get_ec_handle() -> Result<HANDLE, EcError> {
+    // Try multiple known CrosEC / crosecbus device paths
+    let paths = [
+        w!(r"\\.\GLOBALROOT\Device\CrosEC"),
+        w!(r"\\.\CrosEC"),
+        w!(r"\\.\GLOBALROOT\Device\CrosECDevice"),
+        w!(r"\\.\crosecbus"),
+        w!(r"\\.\GLOBALROOT\Device\crosecbus"),
+        w!(r"\\.\GLOBALROOT\Device\CrosEcBus"),
+        w!(r"\\.\crossecbus"),
+        w!(r"\\.\GLOBALROOT\Device\crossecbus"),
+        w!(r"\\.\GLOBALROOT\Device\CrosSecBus"),
+    ];
+
+    for p in paths.iter() {
+        let res = unsafe {
+            CreateFileW(
+                *p,
+                FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                None,
+            )
+        };
+
+        match res {
+            Ok(h) => {
+                if EC_OPEN_LOGGED.get().is_none() {
+                    let _ = EC_OPEN_LOGGED.set(true);
+                    println!("✅ EC device opened");
+                }
+                return Ok(h);
+            }
+            Err(e) => {
+                // Check specifically for Access Denied
+                if e.code() == ERROR_ACCESS_DENIED.into() {
+                    return Err(EcError::AccessDenied);
+                }
+            }
+        }
+    }
+
+    // If we get here, we either couldn't find the device or had other errors
+    // But if we saw at least one AccessDenied, we should probably report that?
+    // For now, if we can't open any, assume driver missing or general failure
+    // unless we want to be more specific.
+    // Let's return DriverMissing if we simply couldn't find it.
+    println!("❌ EC device open failed (all known paths). Ensure the Framework EC driver (crosecbus/crossecbus) is installed.");
+    Err(EcError::DriverMissing)
+}
+
+fn close_ec_handle(handle: HANDLE) {
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+}
 
 const EC_MEMMAP_SIZE: usize = 255;
 const HEADER_LEN: usize = 8;
@@ -11,37 +84,8 @@ const FILE_DEVICE_CROS_EC: u32 = 0x80EC;
 const IOCTL_CROSEC_XCMD: u32 = ((FILE_DEVICE_CROS_EC) << 16) + ((0x3) << 14) + ((0x801) << 2) + 0;
 const IOCTL_CROSEC_RDMEM: u32 = ((FILE_DEVICE_CROS_EC) << 16) + ((0x1) << 14) + ((0x802) << 2) + 0;
 
-static mut EC_HANDLE: Option<HANDLE> = None;
-
-fn init_ec() -> bool {
-    unsafe {
-        if EC_HANDLE.is_some() {
-            return true;
-        }
-
-        let path = w!(r"\\.\GLOBALROOT\Device\CrosEC");
-        match CreateFileW(
-            path,
-            FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            None,
-        ) {
-            Ok(h) => {
-                EC_HANDLE = Some(h);
-                true
-            }
-            Err(_) => false,
-        }
-    }
-}
-
 pub fn read_ec_memory(offset: u16, length: u16) -> Option<Vec<u8>> {
-    if !init_ec() {
-        return None;
-    }
+    let handle = get_ec_handle().ok()?;
 
     #[repr(C)]
     struct ReadMem {
@@ -57,7 +101,6 @@ pub fn read_ec_memory(offset: u16, length: u16) -> Option<Vec<u8>> {
     };
 
     unsafe {
-        let handle = EC_HANDLE?;
         let _ = DeviceIoControl(
             handle,
             IOCTL_CROSEC_RDMEM,
@@ -70,13 +113,19 @@ pub fn read_ec_memory(offset: u16, length: u16) -> Option<Vec<u8>> {
         );
     }
 
+    close_ec_handle(handle);
     Some(rm.buffer[..(length as usize)].to_vec())
 }
 
-pub fn send_ec_command(command: u16, version: u8, data: &[u8]) -> Option<Vec<u8>> {
-    if !init_ec() {
-        return None;
-    }
+pub fn send_ec_command(command: u16, version: u8, data: &[u8]) -> Result<Vec<u8>, EcError> {
+    let handle = get_ec_handle()?;
+
+    println!(
+        "📤 Sending EC command: 0x{:02X}, version: {}, data len: {}",
+        command,
+        version,
+        data.len()
+    );
 
     #[repr(C)]
     struct EcCommand {
@@ -99,10 +148,9 @@ pub fn send_ec_command(command: u16, version: u8, data: &[u8]) -> Option<Vec<u8>
 
     cmd.buffer[..data.len()].copy_from_slice(data);
 
-    unsafe {
-        let handle = EC_HANDLE?;
+    let result = unsafe {
         let mut returned: u32 = 0;
-        let _ = DeviceIoControl(
+        let io_result = DeviceIoControl(
             handle,
             IOCTL_CROSEC_XCMD,
             Some(&mut cmd as *mut _ as *mut _),
@@ -113,22 +161,47 @@ pub fn send_ec_command(command: u16, version: u8, data: &[u8]) -> Option<Vec<u8>
             None,
         );
 
+        if let Err(ref e) = io_result {
+            println!("📥 EC IOCTL error: {:?}", e);
+            if e.code() == ERROR_ACCESS_DENIED.into() {
+                println!("🔒 EC access denied.");
+                close_ec_handle(handle);
+                return Err(EcError::AccessDenied);
+            }
+        }
+
+        println!(
+            "📥 EC command result: {:?}, returned bytes: {}, cmd.result: {}",
+            io_result, returned, cmd.result
+        );
+
         if cmd.result != 0 {
-            return None;
+            if cmd.result == 255 {
+                // EC_RES_ACCESS_DENIED often maps to this or similar
+                println!("❌ EC command blocked by permissions.");
+            } else {
+                println!("❌ EC command failed with result code: {}", cmd.result);
+            }
+            close_ec_handle(handle);
+            return Err(EcError::IoError(format!("EC result code: {}", cmd.result)));
         }
 
         let end = returned.min(CROSEC_CMD_MAX_REQUEST as u32) as usize;
-        Some(cmd.buffer[..end].to_vec())
-    }
+        println!("✅ EC command succeeded");
+        Ok(cmd.buffer[..end].to_vec())
+    };
+
+    close_ec_handle(handle);
+    result
 }
 
 pub fn set_fan_duty(percent: u32) -> bool {
     let data = [percent as u8];
-    send_ec_command(0x13, 0, &data).is_some()
+    send_ec_command(0x13, 0, &data).is_ok()
 }
 
 pub fn set_fan_auto() -> bool {
-    send_ec_command(0x14, 0, &[]).is_some()
+    send_ec_command(0x14, 0, &[]).is_ok()
 }
 
 pub fn read_temps() -> Vec<f32> {
@@ -165,5 +238,43 @@ pub fn read_fans() -> Vec<f32> {
 pub fn set_charge_limit(max_pct: u8) -> bool {
     let min_pct = if max_pct > 5 { max_pct - 5 } else { 0 };
     let data = [min_pct, max_pct];
-    send_ec_command(0x30, 0, &data).is_some()
+    send_ec_command(0x30, 0, &data).is_ok()
+}
+
+pub fn set_tdp_watts(tdp: u32) -> bool {
+    let data = tdp.to_le_bytes();
+    send_ec_command(0x20, 0, &data).is_ok()
+}
+
+pub fn set_thermal_limit(limit: u32) -> bool {
+    let data = limit.to_le_bytes();
+    send_ec_command(0x21, 0, &data).is_ok()
+}
+
+pub fn restart_as_admin() {
+    unsafe {
+        let current_exe = std::env::current_exe().unwrap_or_default();
+        let path_str = current_exe.to_str().unwrap_or_default();
+
+        let path_hstring = windows::core::HSTRING::from(path_str);
+        let args_hstring = windows::core::HSTRING::from(""); // Pass current args if needed
+
+        let _ = ShellExecuteW(
+            None,
+            w!("runas"),
+            PCWSTR(path_hstring.as_ptr()),
+            PCWSTR(args_hstring.as_ptr()),
+            None,
+            SW_SHOW,
+        );
+
+        // Exit current process
+        std::process::exit(0);
+    }
+}
+
+pub fn check_connection() -> Result<(), EcError> {
+    let handle = get_ec_handle()?;
+    close_ec_handle(handle);
+    Ok(())
 }
